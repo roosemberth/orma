@@ -8,5 +8,7 @@ pkgs.pkgsStatic.rustPlatform.buildRustPackage {
   src = ../crates/orma;
   cargoLock.lockFile = ../crates/orma/Cargo.lock;
 
+  nativeCheckInputs = [ pkgs.mkpasswd ];
+
   meta.mainProgram = "orma";
 }

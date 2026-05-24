@@ -11,6 +11,11 @@ serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 thiserror = "2"
 
+[dev-dependencies]
+assert_cmd = "2"
+assert_fs = "1"
+predicates = "3"
+
 [profile.release]
 codegen-units = 1
 lto = true

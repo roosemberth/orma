@@ -1,5 +1,7 @@
 { pkgs, ... }:
 {
+  packages = with pkgs; [ mkpasswd ];
+
   languages.rust = {
     enable = true;
     channel = "stable";
