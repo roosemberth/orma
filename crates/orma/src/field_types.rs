@@ -1,6 +1,7 @@
 mod hashed_password;
 mod machine_id;
 
+use crate::asker::Asker;
 use crate::schema;
 use hashed_password::HashedPassword;
 use machine_id::MachineId;
@@ -27,10 +28,14 @@ impl FieldType {
         }
     }
 
-    pub fn generate(&self, field_path: &str) -> Result<Vec<u8>, String> {
+    pub fn generate(
+        &self,
+        field_path: &str,
+        asker: &dyn Asker,
+    ) -> Result<Vec<u8>, String> {
         match self {
-            FieldType::HashedPassword(h) => h.generate(field_path),
-            FieldType::MachineId(m) => m.generate(field_path),
+            FieldType::HashedPassword(h) => h.generate(field_path, asker),
+            FieldType::MachineId(m) => m.generate(field_path, asker),
         }
     }
 }

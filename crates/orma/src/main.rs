@@ -1,11 +1,42 @@
 use argh::FromArgs;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::str::FromStr;
 
+mod asker;
 mod field_types;
 mod generate;
 mod resolve;
 mod schema;
+
+use asker::{Asker, SystemdAsker, TtyAsker};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AskVia {
+    #[default]
+    Tty,
+    SystemdAskPassword,
+}
+
+impl FromStr for AskVia {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "tty" => Ok(AskVia::Tty),
+            "systemd-ask-password" => Ok(AskVia::SystemdAskPassword),
+            other => Err(format!(
+                "unknown --ask-via '{other}', expected 'tty' or 'systemd-ask-password'"
+            )),
+        }
+    }
+}
+
+fn build_asker(via: AskVia) -> Box<dyn Asker> {
+    match via {
+        AskVia::Tty => Box::new(TtyAsker),
+        AskVia::SystemdAskPassword => Box::new(SystemdAsker),
+    }
+}
 
 /// Loads a system's passwords and keys at boot from a separate volume.
 #[derive(FromArgs)]
@@ -58,6 +89,10 @@ struct GenerateCmd {
     /// overwrite values already present in the volume
     #[argh(switch)]
     force: bool,
+
+    /// prompt mechanism: tty (default) or systemd-ask-password
+    #[argh(option, default = "AskVia::Tty")]
+    ask_via: AskVia,
 }
 
 fn main() -> ExitCode {
@@ -93,6 +128,7 @@ fn run_resolve(c: ResolveCmd) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn run_generate(c: GenerateCmd) -> Result<(), Box<dyn std::error::Error>> {
-    generate::run(&c.schema, &c.volume, c.force)?;
+    let asker = build_asker(c.ask_via);
+    generate::run(&c.schema, &c.volume, c.force, asker.as_ref())?;
     Ok(())
 }

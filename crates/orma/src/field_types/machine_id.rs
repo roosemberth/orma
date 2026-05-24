@@ -1,6 +1,8 @@
 use std::fs::File;
 use std::io::Read;
 
+use crate::asker::Asker;
+
 #[derive(Debug)]
 pub struct MachineId;
 
@@ -30,6 +32,7 @@ impl MachineId {
     pub(super) fn generate(
         &self,
         _field_path: &str,
+        _asker: &dyn Asker,
     ) -> Result<Vec<u8>, String> {
         let mut bytes = [0u8; 16];
         File::open("/dev/urandom")
@@ -90,7 +93,8 @@ mod tests {
 
     #[test]
     fn generated_is_valid() {
-        let v = MachineId.generate("/machine-id").unwrap();
+        use crate::asker::TtyAsker;
+        let v = MachineId.generate("/machine-id", &TtyAsker).unwrap();
         assert!(MachineId.validate(&v).is_ok());
     }
 }

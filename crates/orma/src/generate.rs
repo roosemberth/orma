@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 
+use crate::asker::Asker;
 use crate::field_types::{self, FieldType};
 use crate::schema::{self, Field};
 
@@ -34,6 +35,7 @@ pub fn run(
     schema_path: &Path,
     volume: &Path,
     force: bool,
+    asker: &dyn Asker,
 ) -> Result<(), Error> {
     let schema = schema::parse(schema_path)?;
     require_directory(volume)?;
@@ -44,7 +46,7 @@ pub fn run(
         .map(|f| field_types::parse(f).map_err(Error::UnknownType))
         .collect::<Result<_, _>>()?;
 
-    preflight(&parsed)?;
+    preflight(&parsed, asker)?;
     if !force {
         refuse_overwrites(volume, &schema.fields)?;
     }
@@ -54,10 +56,11 @@ pub fn run(
         .iter()
         .zip(&parsed)
         .map(|(f, ft)| {
-            ft.generate(&f.path).map_err(|reason| Error::Generate {
-                path: f.path.clone(),
-                reason,
-            })
+            ft.generate(&f.path, asker)
+                .map_err(|reason| Error::Generate {
+                    path: f.path.clone(),
+                    reason,
+                })
         })
         .collect::<Result<_, _>>()?;
 
@@ -75,14 +78,20 @@ fn require_directory(p: &Path) -> Result<(), Error> {
     }
 }
 
-fn preflight(types: &[FieldType]) -> Result<(), Error> {
+fn preflight(types: &[FieldType], asker: &dyn Asker) -> Result<(), Error> {
     let mut missing: Vec<String> = Vec::new();
+    let mut note_missing = |tool: &str| {
+        if !in_path(tool) && !missing.iter().any(|t| t == tool) {
+            missing.push(tool.to_string());
+        }
+    };
     for ft in types {
         for tool in ft.required_tools() {
-            if !in_path(tool) && !missing.iter().any(|t| t == tool) {
-                missing.push((*tool).to_string());
-            }
+            note_missing(tool);
         }
+    }
+    for tool in asker.required_tools() {
+        note_missing(tool);
     }
     if missing.is_empty() {
         Ok(())

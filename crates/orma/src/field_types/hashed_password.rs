@@ -1,5 +1,7 @@
-use std::io::{BufRead, IsTerminal, Write, stderr, stdin};
+use std::io::Write;
 use std::process::{Command, Stdio};
+
+use crate::asker::Asker;
 
 #[derive(Debug)]
 pub struct HashedPassword;
@@ -26,30 +28,17 @@ impl HashedPassword {
         Ok(())
     }
 
-    pub(super) fn generate(&self, field_path: &str) -> Result<Vec<u8>, String> {
-        let p1 = read_passphrase(&format!("Passphrase for {field_path}: "))?;
-        let p2 = read_passphrase("Confirm: ")?;
+    pub(super) fn generate(
+        &self,
+        field_path: &str,
+        asker: &dyn Asker,
+    ) -> Result<Vec<u8>, String> {
+        let p1 = asker.ask(&format!("Passphrase for {field_path}: "))?;
+        let p2 = asker.ask("Confirm: ")?;
         if p1 != p2 {
             return Err("passphrases do not match".into());
         }
         mkpasswd(&p1)
-    }
-}
-
-fn read_passphrase(prompt: &str) -> Result<String, String> {
-    let mut err = stderr();
-    write!(err, "{prompt}").ok();
-    err.flush().ok();
-    if stdin().is_terminal() {
-        rpassword::read_password()
-            .map_err(|e| format!("failed to read passphrase: {e}"))
-    } else {
-        let mut buf = String::new();
-        stdin()
-            .lock()
-            .read_line(&mut buf)
-            .map_err(|e| format!("failed to read passphrase: {e}"))?;
-        Ok(buf.trim_end_matches(['\n', '\r']).to_string())
     }
 }
 
