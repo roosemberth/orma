@@ -54,3 +54,5 @@ The Nix derivation under `nix/default.nix` builds a static-pie musl binary
 suitable for an initrd.
 
 For development, enter `devenv shell`.
+
+The latest CI build from `master` can be [downloaded here](https://gitlab.com/roosemberth/orma/-/jobs/artifacts/master/raw/orma/bin/orma?job=build).

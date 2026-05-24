@@ -1,0 +1,59 @@
+stages:
+  - build
+
+build:
+  stage: build
+  image: nixos/nix:2.28.0
+  variables:
+    NIX_CONFIG: |
+      experimental-features = nix-command flakes
+  before_script:
+    - |
+      if [ -n "${NIXBUILDNET_TOKEN:-}" ]; then
+        mkdir -p ~/.ssh ~/.config/nix
+        cat > ~/.ssh/config <<'EOF'
+      Host eu.nixbuild.net
+        User authtoken
+        PreferredAuthentications none
+        SendEnv NIXBUILDNET_TOKEN
+        ServerAliveInterval 60
+        LogLevel ERROR
+        IPQoS throughput
+      EOF
+        chmod 600 ~/.ssh/config
+        echo 'eu.nixbuild.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIQCZc54poJ8vqawd8TraNryQeJnvH1eLpIDgbiqymM' >> ~/.ssh/known_hosts
+        chmod 600 ~/.ssh/known_hosts
+        cat > ~/.config/nix/nix.conf <<'EOF'
+      extra-substituters = ssh-ng://eu.nixbuild.net
+      extra-trusted-public-keys = nixbuild.net/JRWTER-1:TA0naisIeuntbToSnGROCMAAb/gh6WTS3B9qfCxfunI=
+      builders = ssh-ng://eu.nixbuild.net x86_64-linux - 100 1 benchmark,big-parallel,kvm,nixos-test
+      builders-use-substitutes = true
+      EOF
+        echo "nixbuild.net configured as remote builder + substituter"
+      else
+        echo "NIXBUILDNET_TOKEN unset; building locally"
+      fi
+    - |
+      NIXPKGS_REV=$(nix-instantiate --eval --raw -E \
+        '(builtins.fromJSON (builtins.readFile ./devenv.lock)).nodes.nixpkgs.locked.rev')
+      export NIX_PATH="nixpkgs=https://github.com/NixOS/nixpkgs/archive/$NIXPKGS_REV.tar.gz"
+      echo "Using nixpkgs $NIXPKGS_REV (from devenv.lock)"
+  script:
+    - |
+      if [ -n "${NIXBUILDNET_TOKEN:-}" ]; then
+        nix build \
+          --store ssh-ng://eu.nixbuild.net \
+          --eval-store auto \
+          -f nix/default.nix \
+          --no-link -L
+        out=$(nix path-info --eval-store auto --store ssh-ng://eu.nixbuild.net -f nix/default.nix)
+        nix copy --no-check-sigs --from ssh-ng://eu.nixbuild.net "$out"
+      else
+        nix build -f nix/default.nix --no-link -L
+        out=$(nix path-info -f nix/default.nix)
+      fi
+    - cp -rL "$out" orma
+  artifacts:
+    paths:
+      - orma
+    expire_in: 1 week
