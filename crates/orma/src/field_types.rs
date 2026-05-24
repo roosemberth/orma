@@ -15,6 +15,18 @@ impl FieldType {
             FieldType::HashedPassword(h) => h.validate(raw),
         }
     }
+
+    pub fn required_tools(&self) -> &'static [&'static str] {
+        match self {
+            FieldType::HashedPassword(h) => h.required_tools(),
+        }
+    }
+
+    pub fn generate(&self, field_path: &str) -> Result<Vec<u8>, String> {
+        match self {
+            FieldType::HashedPassword(h) => h.generate(field_path),
+        }
+    }
 }
 
 pub fn parse(field: &schema::Field) -> Result<FieldType, String> {

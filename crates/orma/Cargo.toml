@@ -6,6 +6,7 @@ description = "Loads a stateless system's passwords and keys at boot from a sepa
 
 [dependencies]
 argh = "0.1"
+rpassword = "7"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
 thiserror = "2"

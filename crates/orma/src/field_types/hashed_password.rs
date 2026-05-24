@@ -1,7 +1,14 @@
+use std::io::{BufRead, IsTerminal, Write, stderr, stdin};
+use std::process::{Command, Stdio};
+
 #[derive(Debug)]
 pub struct HashedPassword;
 
 impl HashedPassword {
+    pub(super) fn required_tools(&self) -> &'static [&'static str] {
+        &["mkpasswd"]
+    }
+
     pub(super) fn validate(&self, raw: &[u8]) -> Result<(), &'static str> {
         let s =
             std::str::from_utf8(raw).map_err(|_| "value is not valid UTF-8")?;
@@ -18,6 +25,58 @@ impl HashedPassword {
         }
         Ok(())
     }
+
+    pub(super) fn generate(&self, field_path: &str) -> Result<Vec<u8>, String> {
+        let p1 = read_passphrase(&format!("Passphrase for {field_path}: "))?;
+        let p2 = read_passphrase("Confirm: ")?;
+        if p1 != p2 {
+            return Err("passphrases do not match".into());
+        }
+        mkpasswd(&p1)
+    }
+}
+
+fn read_passphrase(prompt: &str) -> Result<String, String> {
+    let mut err = stderr();
+    write!(err, "{prompt}").ok();
+    err.flush().ok();
+    if stdin().is_terminal() {
+        rpassword::read_password()
+            .map_err(|e| format!("failed to read passphrase: {e}"))
+    } else {
+        let mut buf = String::new();
+        stdin()
+            .lock()
+            .read_line(&mut buf)
+            .map_err(|e| format!("failed to read passphrase: {e}"))?;
+        Ok(buf.trim_end_matches(['\n', '\r']).to_string())
+    }
+}
+
+fn mkpasswd(passphrase: &str) -> Result<Vec<u8>, String> {
+    let mut child = Command::new("mkpasswd")
+        .args(["-m", "yescrypt", "-s"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| format!("mkpasswd failed to start: {e}"))?;
+    {
+        let stdin = child.stdin.as_mut().expect("stdin was piped");
+        stdin
+            .write_all(passphrase.as_bytes())
+            .map_err(|e| format!("mkpasswd stdin: {e}"))?;
+    }
+    let output = child
+        .wait_with_output()
+        .map_err(|e| format!("mkpasswd wait: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "mkpasswd failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    Ok(output.stdout)
 }
 
 #[cfg(test)]
