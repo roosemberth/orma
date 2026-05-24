@@ -43,16 +43,30 @@ impl std::fmt::Display for Version {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("read failed: {0}")]
-    Read(#[from] std::io::Error),
+    #[error("read failed ({path}): {source}")]
+    Read {
+        path: String,
+        #[source]
+        source: std::io::Error,
+    },
 
-    #[error("parse failed: {0}")]
-    Parse(#[from] serde_yaml::Error),
+    #[error("parse failed ({path}): {source}")]
+    Parse {
+        path: String,
+        #[source]
+        source: serde_yaml::Error,
+    },
 }
 
 pub fn parse(path: &Path) -> Result<Schema, Error> {
-    let raw = std::fs::read_to_string(path)?;
-    let schema = serde_yaml::from_str(&raw)?;
+    let raw = std::fs::read_to_string(path).map_err(|source| Error::Read {
+        path: path.display().to_string(),
+        source,
+    })?;
+    let schema = serde_yaml::from_str(&raw).map_err(|source| Error::Parse {
+        path: path.display().to_string(),
+        source,
+    })?;
     Ok(schema)
 }
 
