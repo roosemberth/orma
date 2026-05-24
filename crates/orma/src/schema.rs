@@ -41,7 +41,16 @@ impl std::fmt::Display for Version {
     }
 }
 
-pub fn parse(path: &Path) -> Result<Schema, Box<dyn std::error::Error>> {
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("read failed: {0}")]
+    Read(#[from] std::io::Error),
+
+    #[error("parse failed: {0}")]
+    Parse(#[from] serde_yaml::Error),
+}
+
+pub fn parse(path: &Path) -> Result<Schema, Error> {
     let raw = std::fs::read_to_string(path)?;
     let schema = serde_yaml::from_str(&raw)?;
     Ok(schema)

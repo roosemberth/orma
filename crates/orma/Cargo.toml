@@ -8,6 +8,7 @@ description = "Loads a stateless system's passwords and keys at boot from a sepa
 argh = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_yaml = "0.9"
+thiserror = "2"
 
 [profile.release]
 codegen-units = 1
