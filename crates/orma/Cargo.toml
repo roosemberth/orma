@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2024"
 description = "Loads a stateless system's passwords and keys at boot from a separate volume"
 
+[dependencies]
+argh = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+
 [profile.release]
 codegen-units = 1
 lto = true

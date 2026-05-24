@@ -1,0 +1,7 @@
+version: 1
+fields:
+  - path: /passwd.hash
+    type: hashed-password
+  - path: /sudo.hash
+    type: hashed-password
+    optional: true
