@@ -1,0 +1,12 @@
+[package]
+name = "orma"
+version = "0.1.0"
+edition = "2024"
+description = "Loads a stateless system's passwords and keys at boot from a separate volume"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "z"
+panic = "abort"
+strip = true
