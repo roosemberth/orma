@@ -1,11 +1,13 @@
 use assert_cmd::Command;
 use assert_fs::TempDir;
+use assert_fs::fixture::ChildPath;
 use assert_fs::prelude::*;
 use predicates::prelude::*;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const VALID_CRYPT_HASH: &str = "$y$j9T$saltSaltSalt$hashHashHashHashHash";
+const VALID_MACHINE_ID: &str = "deadbeefdeadbeefdeadbeefdeadbeef";
 
 fn orma() -> Command {
     Command::cargo_bin("orma").unwrap()
@@ -15,6 +17,33 @@ fn fixture(name: &str) -> PathBuf {
     [env!("CARGO_MANIFEST_DIR"), "fixtures", name]
         .iter()
         .collect()
+}
+
+/// Seed `volume` with values for every required field in `schema-example.yaml`.
+/// Optional fields are left absent; tests can add them explicitly.
+fn seed_example_volume(volume: &ChildPath) {
+    volume.create_dir_all().unwrap();
+    volume
+        .child("machine-id")
+        .write_str(VALID_MACHINE_ID)
+        .unwrap();
+    volume
+        .child("passwd.hash")
+        .write_str(VALID_CRYPT_HASH)
+        .unwrap();
+}
+
+/// Assert that every file in `src` exists in `dst` with the same bytes.
+fn assert_dir_contents_match(src: &Path, dst: &Path) {
+    for entry in fs::read_dir(src).unwrap() {
+        let entry = entry.unwrap();
+        let name = entry.file_name();
+        let s = fs::read(entry.path()).unwrap();
+        let d = fs::read(dst.join(&name)).unwrap_or_else(|_| {
+            panic!("missing in dst: {}", name.to_string_lossy())
+        });
+        assert_eq!(s, d, "differs: {}", name.to_string_lossy());
+    }
 }
 
 #[test]
@@ -31,6 +60,9 @@ fn generate_happy_path() {
         .assert()
         .success();
 
+    volume
+        .child("machine-id")
+        .assert(predicate::str::is_match(r"^[0-9a-f]{32}\n?$").unwrap());
     volume
         .child("passwd.hash")
         .assert(predicate::str::starts_with("$y$"));
@@ -112,11 +144,7 @@ fn generate_mismatched_passphrases() {
 fn resolve_happy_path() {
     let tmp = TempDir::new().unwrap();
     let volume = tmp.child("volume");
-    volume.create_dir_all().unwrap();
-    volume
-        .child("passwd.hash")
-        .write_str(VALID_CRYPT_HASH)
-        .unwrap();
+    seed_example_volume(&volume);
     volume
         .child("sudo.hash")
         .write_str(VALID_CRYPT_HASH)
@@ -132,8 +160,7 @@ fn resolve_happy_path() {
         .assert()
         .success();
 
-    output.child("passwd.hash").assert(VALID_CRYPT_HASH);
-    output.child("sudo.hash").assert(VALID_CRYPT_HASH);
+    assert_dir_contents_match(volume.path(), output.path());
 }
 
 #[test]
@@ -167,11 +194,7 @@ fn resolve_required_missing() {
 fn resolve_optional_missing() {
     let tmp = TempDir::new().unwrap();
     let volume = tmp.child("volume");
-    volume.create_dir_all().unwrap();
-    volume
-        .child("passwd.hash")
-        .write_str(VALID_CRYPT_HASH)
-        .unwrap();
+    seed_example_volume(&volume);
     let output = tmp.child("output");
     output.create_dir_all().unwrap();
 
@@ -183,7 +206,6 @@ fn resolve_optional_missing() {
         .assert()
         .success();
 
-    output.child("passwd.hash").assert(VALID_CRYPT_HASH);
     output.child("sudo.hash").assert(predicate::path::missing());
 }
 
@@ -248,11 +270,5 @@ fn roundtrip_generate_then_resolve() {
         .assert()
         .success();
 
-    let v_pw = fs::read_to_string(volume.child("passwd.hash").path()).unwrap();
-    let o_pw = fs::read_to_string(output.child("passwd.hash").path()).unwrap();
-    assert_eq!(v_pw, o_pw);
-
-    let v_su = fs::read_to_string(volume.child("sudo.hash").path()).unwrap();
-    let o_su = fs::read_to_string(output.child("sudo.hash").path()).unwrap();
-    assert_eq!(v_su, o_su);
+    assert_dir_contents_match(volume.path(), output.path());
 }
