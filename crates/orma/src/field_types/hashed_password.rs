@@ -30,10 +30,10 @@ impl HashedPassword {
 
     pub(super) fn generate(
         &self,
-        field_path: &str,
+        label: &str,
         asker: &dyn Asker,
     ) -> Result<Vec<u8>, String> {
-        let p1 = asker.ask(&format!("Passphrase for {field_path}: "))?;
+        let p1 = asker.ask(&format!("Passphrase for {label}: "))?;
         let p2 = asker.ask("Confirm: ")?;
         if p1 != p2 {
             return Err("passphrases do not match".into());

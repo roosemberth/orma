@@ -56,7 +56,8 @@ pub fn run(
         .iter()
         .zip(&parsed)
         .map(|(f, ft)| {
-            ft.generate(&f.path, asker)
+            let label = field_label(f);
+            ft.generate(&label, asker)
                 .map_err(|reason| Error::Generate {
                     path: f.path.clone(),
                     reason,
@@ -68,6 +69,13 @@ pub fn run(
         write_value(volume, &f.path, v)?;
     }
     Ok(())
+}
+
+fn field_label(field: &Field) -> String {
+    match &field.description {
+        Some(d) => format!("{d} ({})", field.path),
+        None => field.path.clone(),
+    }
 }
 
 fn require_directory(p: &Path) -> Result<(), Error> {

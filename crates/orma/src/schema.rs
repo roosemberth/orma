@@ -14,6 +14,8 @@ pub struct Field {
     pub r#type: String,
     #[serde(default)]
     pub optional: bool,
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq)]

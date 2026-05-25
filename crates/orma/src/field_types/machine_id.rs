@@ -31,7 +31,7 @@ impl MachineId {
 
     pub(super) fn generate(
         &self,
-        _field_path: &str,
+        _label: &str,
         _asker: &dyn Asker,
     ) -> Result<Vec<u8>, String> {
         let mut bytes = [0u8; 16];

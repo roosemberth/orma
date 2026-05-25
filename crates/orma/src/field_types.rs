@@ -30,12 +30,12 @@ impl FieldType {
 
     pub fn generate(
         &self,
-        field_path: &str,
+        label: &str,
         asker: &dyn Asker,
     ) -> Result<Vec<u8>, String> {
         match self {
-            FieldType::HashedPassword(h) => h.generate(field_path, asker),
-            FieldType::MachineId(m) => m.generate(field_path, asker),
+            FieldType::HashedPassword(h) => h.generate(label, asker),
+            FieldType::MachineId(m) => m.generate(label, asker),
         }
     }
 }
@@ -57,6 +57,7 @@ mod tests {
             path: "/x".into(),
             r#type: kind.into(),
             optional: false,
+            description: None,
         }
     }
 

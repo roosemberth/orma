@@ -58,7 +58,10 @@ fn generate_happy_path() {
         .arg(volume.path())
         .write_stdin("secret\nsecret\nsudo\nsudo\n")
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains(
+            "Passphrase for User password (/passwd.hash): ",
+        ));
 
     volume
         .child("machine-id")
