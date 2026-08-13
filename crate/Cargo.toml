@@ -10,3 +10,11 @@ lto = true
 opt-level = "z"
 panic = "abort"
 strip = true
+
+[dependencies]
+argh = "0.1"
+thiserror = "2"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
