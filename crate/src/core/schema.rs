@@ -33,6 +33,8 @@ pub mod file {
     }
 }
 
+use crate::core::field_type::FieldKind;
+
 /// A schema whose every field is one orma can act on.
 #[derive(Debug)]
 pub struct Schema {
@@ -54,10 +56,11 @@ impl Schema {
             if fields.iter().any(|f| f.path == path) {
                 return Err(SchemaError::DuplicatePath(path.as_str().to_owned()));
             }
-            fields.push(Field {
-                path,
+            let kind = FieldKind::parse(&field.type_name).ok_or(SchemaError::UnknownType {
+                path: path.as_str().to_owned(),
                 type_name: field.type_name,
-            });
+            })?;
+            fields.push(Field { path, kind });
         }
 
         Ok(Schema { fields })
@@ -71,7 +74,7 @@ impl Schema {
 #[derive(Debug)]
 pub struct Field {
     path: FieldPath,
-    type_name: String,
+    kind: FieldKind,
 }
 
 impl Field {
@@ -79,8 +82,8 @@ impl Field {
         &self.path
     }
 
-    pub fn type_name(&self) -> &str {
-        &self.type_name
+    pub fn kind(&self) -> FieldKind {
+        self.kind
     }
 }
 
@@ -115,6 +118,12 @@ impl FieldPath {
     pub fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// The components to descend from the volume root.
+    /// None of them is empty, `.` or `..`, so a caller may simply join them.
+    pub fn components(&self) -> impl Iterator<Item = &str> {
+        self.0.split('/').skip(1)
+    }
 }
 
 impl std::fmt::Display for FieldPath {
@@ -137,6 +146,9 @@ pub enum SchemaError {
 
     #[error("duplicate field path: {0}")]
     DuplicatePath(String),
+
+    #[error("{path}: field type '{type_name}' is not implemented")]
+    UnknownType { path: String, type_name: String },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]

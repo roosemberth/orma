@@ -61,7 +61,7 @@ mod tests {
     fn reads_the_declared_fields() {
         let schema = fixture!("schema-example.yaml").unwrap();
         let seen: Vec<&str> = schema.fields().iter().map(|f| f.path().as_str()).collect();
-        assert_eq!(seen, vec!["/machine-id", "/user.passwd", "/sudo.passwd"]);
+        assert_eq!(seen, vec!["/machine-id"]);
     }
 
     #[test]

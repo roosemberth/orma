@@ -27,5 +27,6 @@
     )
 )]
 
+pub mod field_type;
 pub mod resolve;
 pub mod schema;

@@ -1,10 +1,13 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use argh::FromArgs;
 
 mod core;
 mod schema_file;
+mod volume;
+
+use core::resolve::{Mode, Resolve, ResolveError, Step};
 
 /// Loads a system's passwords and keys at boot from a separate volume.
 #[derive(FromArgs)]
@@ -69,14 +72,37 @@ fn run_resolve(cmd: ResolveCmd) -> ExitCode {
         }
     };
 
-    // FIXME: consumed when resolve learns to read its volume.
-    let _ = (&cmd.volume, &output);
+    if !cmd.volume.is_dir() {
+        eprintln!("{}: not a directory", cmd.volume.display());
+        return ExitCode::from(1);
+    }
 
-    match core::resolve::resolve(&schema) {
+    let mode = match output {
+        Some(_) => Mode::Write,
+        None => Mode::EvaluateOnly,
+    };
+
+    match drive_resolve(Resolve::new(&schema, mode), &cmd.volume) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
-            ExitCode::from(3)
+            match err {
+                ResolveError::Unsatisfied(_) => ExitCode::from(2),
+                ResolveError::UnimplementedWrite => ExitCode::from(3),
+            }
+        }
+    }
+}
+
+fn drive_resolve(mut resolve: Resolve, volume: &Path) -> Result<(), ResolveError> {
+    loop {
+        match resolve.step() {
+            Step::ReadValue(request) => match volume::read(volume, request.path()) {
+                Ok(value) => request.found(&value),
+                Err(volume::ReadError::Absent) => request.absent(),
+                Err(volume::ReadError::Unreadable(err)) => request.unreadable(err.to_string()),
+            },
+            Step::Done(verdict) => return verdict,
         }
     }
 }
