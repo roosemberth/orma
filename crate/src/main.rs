@@ -92,6 +92,7 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
             eprintln!("{err}");
             match err {
                 GenerateError::WouldOverwrite(_) => ExitCode::from(2),
+                GenerateError::Unable { .. } => ExitCode::from(3),
                 _ => ExitCode::from(1),
             }
         }
