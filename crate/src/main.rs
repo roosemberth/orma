@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use argh::FromArgs;
 
 mod core;
+mod passphrase;
 mod random;
 mod schema_file;
 mod volume;
@@ -112,6 +113,13 @@ fn drive_generate(mut generate: Generate, volume: &Path) -> Result<(), GenerateE
                 Ok(entropy) => request.filled(&entropy),
                 Err(err) => request.failed(err.to_string()),
             },
+            Step::HashPassphrase(request) => {
+                let hashed = passphrase::prompt_passphrase_and_hash(request.path().as_str());
+                match hashed {
+                    Ok(record) => request.hashed(&record),
+                    Err(err) => request.failed(err.to_string()),
+                }
+            }
             Step::WriteValue(request) => {
                 let written = volume::write(volume, request.path(), request.value());
                 match written {

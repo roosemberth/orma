@@ -9,6 +9,7 @@ use crate::core::schema::{Field, FieldPath, Schema};
 pub enum Step<'r, 's> {
     CheckValue(CheckValue<'r, 's>),
     DrawEntropy(DrawEntropy<'r, 's>),
+    HashPassphrase(GetHashedPassphrase<'r, 's>),
     WriteValue(WriteValue<'r, 's>),
     Done(Result<(), GenerateError>),
 }
@@ -65,22 +66,36 @@ impl<'s> DrawEntropy<'_, 's> {
 
     /// Submit the drawn randomness.
     pub fn filled(self, entropy: &[u8]) {
+        let (field, at) = (self.field, self.current_field_idx);
         let value = (self.build)(entropy);
-        // What generate produces has to be what resolve would accept, so the
-        // value is held to its own type before it goes anywhere.
-        match self.field.kind().validate(&value) {
-            Ok(()) => {
-                self.generate.values.push(value);
-                self.generate.phase = GeneratePhase::MakeField(self.current_field_idx + 1);
-            }
-            Err(reason) => {
-                self.generate.failure = Some(GenerateError::Unusable {
-                    path: self.field.path().clone(),
-                    reason,
-                });
-                self.generate.phase = GeneratePhase::Done;
-            }
-        }
+        self.generate.accept(field, at, value);
+    }
+
+    pub fn failed(self, why: String) {
+        self.generate.fail(self.field, why);
+    }
+}
+
+/// Request a passphrase from the operator and hash it.
+/// Both steps are performed by the driver, so we never have the raw passphrase.
+#[must_use = "the hashed password has to be answered for generate to go on"]
+pub struct GetHashedPassphrase<'r, 's> {
+    generate: &'r mut Generate<'s>,
+    field: &'s Field,
+    current_field_idx: usize,
+}
+
+impl<'s> GetHashedPassphrase<'_, 's> {
+    /// Which field the operator is being asked about.
+    pub fn path(&self) -> &'s FieldPath {
+        self.field.path()
+    }
+
+    /// Record the hashed passphrase.
+    pub fn hashed(self, record: &[u8]) {
+        let field = self.field;
+        let at = self.current_field_idx;
+        self.generate.accept(field, at, record.to_vec());
     }
 
     pub fn failed(self, why: String) {
@@ -187,6 +202,13 @@ impl<'s> Generate<'s> {
                         bytes,
                         build,
                     }),
+                    Some(Recipe::FromPassphrasePrompt) => {
+                        Step::HashPassphrase(GetHashedPassphrase {
+                            generate: self,
+                            field,
+                            current_field_idx: at,
+                        })
+                    }
                     None => {
                         self.failure = Some(GenerateError::Unable {
                             path: field.path().clone(),
@@ -225,6 +247,23 @@ impl<'s> Generate<'s> {
         }
         self.phase = GeneratePhase::MakeField(0);
         self.step()
+    }
+
+    /// Check a produced value using the field validator and accept it.
+    fn accept(&mut self, field: &Field, field_idx: usize, value: Vec<u8>) {
+        match field.kind().validate(&value) {
+            Ok(()) => {
+                self.values.push(value);
+                self.phase = GeneratePhase::MakeField(field_idx + 1);
+            }
+            Err(reason) => {
+                self.failure = Some(GenerateError::Unusable {
+                    path: field.path().clone(),
+                    reason,
+                });
+                self.phase = GeneratePhase::Done;
+            }
+        }
     }
 
     fn fail(&mut self, field: &Field, why: String) {
@@ -274,6 +313,7 @@ mod tests {
                     assert_eq!(draw.wanted(), entropy.len());
                     draw.filled(entropy);
                 }
+                Step::HashPassphrase(hash) => hash.hashed(CRYPT_RECORD),
                 Step::WriteValue(write) => {
                     written.push((write.path().as_str().to_owned(), write.value().to_vec()));
                     write.written();
@@ -282,6 +322,8 @@ mod tests {
             }
         }
     }
+
+    const CRYPT_RECORD: &[u8] = b"$y$j9T$saltSaltSalt$hashHashHash";
 
     const ENTROPY: &[u8] = &[
         0xd2, 0xc8, 0xe7, 0xe9, 0xa4, 0xb3, 0x4d, 0x62, //
@@ -331,6 +373,39 @@ mod tests {
     }
 
     #[test]
+    fn a_hashed_password_is_asked_for_and_accepted_as_produced() {
+        let schema = schema(vec![fixtures::field("/user.passwd", "hashed-password")]);
+        let (outcome, written) = drive(&schema, vec![FieldValueHeld::Nothing], ENTROPY);
+
+        assert!(outcome.is_ok());
+        assert_eq!(
+            written,
+            vec![("/user.passwd".to_owned(), CRYPT_RECORD.to_vec())]
+        );
+    }
+
+    #[test]
+    fn a_hashing_that_produces_nonsense_is_refused() {
+        let schema = schema(vec![fixtures::field("/user.passwd", "hashed-password")]);
+        let mut generate = Generate::new(&schema);
+        let outcome = loop {
+            match generate.step() {
+                Step::CheckValue(check) => check.absent(),
+                Step::HashPassphrase(hash) => hash.hashed(b"hunter2"),
+                Step::WriteValue(write) => write.written(),
+                Step::DrawEntropy(_) => panic!("unexpected step for this test"),
+                Step::Done(outcome) => break outcome,
+            }
+        };
+        assert!(
+            outcome
+                .unwrap_err()
+                .to_string()
+                .contains("produced a value its own type refuses")
+        );
+    }
+
+    #[test]
     fn the_whole_volume_is_surveyed_before_anything_is_produced() {
         let schema = schema(vec![
             fixtures::field("/machine-id", "machine-id"),
@@ -356,6 +431,7 @@ mod tests {
                 Step::CheckValue(check) => check.absent(),
                 Step::DrawEntropy(draw) => draw.filled(ENTROPY),
                 Step::WriteValue(write) => write.failed("disk full".to_owned()),
+                Step::HashPassphrase(_) => panic!("unexpected step for this test"),
                 Step::Done(outcome) => break outcome,
             }
         };
@@ -373,6 +449,7 @@ mod tests {
                 Step::CheckValue(check) => check.absent(),
                 Step::DrawEntropy(draw) => draw.filled(&[0x01, 0x02]),
                 Step::WriteValue(write) => write.written(),
+                Step::HashPassphrase(_) => panic!("unexpected step for this test"),
                 Step::Done(outcome) => break outcome,
             }
         };
