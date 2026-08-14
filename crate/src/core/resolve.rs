@@ -7,7 +7,7 @@ use crate::core::schema::{Field, FieldPath, Schema};
 pub enum Mode {
     /// Reach a verdict and write nothing.
     EvaluateOnly,
-    /// Reach a verdict, then lay the values at an output path.
+    /// Reach a verdict, then provision the values at an output path.
     Write,
 }
 
@@ -16,6 +16,7 @@ pub enum Mode {
 #[must_use = "resolve makes no progress until the step is carried out"]
 pub enum Step<'r, 's> {
     ReadValue(ReadValue<'r, 's>),
+    WriteValue(WriteValue<'r, 's>),
     Done(Result<(), ResolveError>),
 }
 
@@ -24,6 +25,7 @@ pub enum Step<'r, 's> {
 pub struct ReadValue<'r, 's> {
     resolve: &'r mut Resolve<'s>,
     field: &'s Field,
+    current_field_idx: usize,
 }
 
 impl<'s> ReadValue<'_, 's> {
@@ -32,10 +34,15 @@ impl<'s> ReadValue<'_, 's> {
         self.field.path()
     }
 
-    /// The bytes stored there.
+    /// The file contents were available.
     pub fn found(self, value: &[u8]) {
-        let refused = self.field.kind().validate(value).err().map(Reason::Invalid);
-        self.settle(refused);
+        match self.field.kind().validate(value) {
+            Ok(()) => {
+                self.resolve.values.push(value.to_vec());
+                self.settle(None)
+            }
+            Err(invalid) => self.settle(Some(Reason::Invalid(invalid))),
+        }
     }
 
     /// Nothing is stored there.
@@ -55,7 +62,41 @@ impl<'s> ReadValue<'_, 's> {
                 reason,
             });
         }
-        self.resolve.current_field_index += 1;
+        self.resolve.phase = ResolvePhase::ReadField(self.current_field_idx + 1);
+    }
+}
+
+/// Write the value of a field at the output path.
+#[must_use = "the write has to be answered for resolve to go on"]
+pub struct WriteValue<'r, 's> {
+    resolve: &'r mut Resolve<'s>,
+    field: &'s Field,
+    current_field_idx: usize,
+}
+
+impl<'s> WriteValue<'_, 's> {
+    /// Where the value should be written, relative to the output path.
+    pub fn path(&self) -> &'s FieldPath {
+        self.field.path()
+    }
+
+    pub fn value(&self) -> &[u8] {
+        self.resolve
+            .values
+            .get(self.current_field_idx)
+            .map_or(&[], Vec::as_slice)
+    }
+
+    pub fn written(self) {
+        self.resolve.phase = ResolvePhase::WriteField(self.current_field_idx + 1);
+    }
+
+    pub fn failed(self, why: String) {
+        self.resolve.failure = Some(ResolveError::WriteFailed {
+            path: self.field.path().clone(),
+            why,
+        });
+        self.resolve.phase = ResolvePhase::Done;
     }
 }
 
@@ -63,8 +104,8 @@ impl<'s> ReadValue<'_, 's> {
 pub enum ResolveError {
     #[error("{}", .0.iter().map(Rejection::to_string).collect::<Vec<_>>().join("\n"))]
     Unsatisfied(Vec<Rejection>),
-    #[error("laying the values at an output path is not implemented")]
-    UnimplementedWrite,
+    #[error("{path}: could not be written: {why}")]
+    WriteFailed { path: FieldPath, why: String },
 }
 
 #[derive(Debug)]
@@ -89,15 +130,26 @@ pub enum Reason {
     Invalid(#[from] Invalid),
 }
 
+#[derive(Debug)]
+enum ResolvePhase {
+    ReadField(usize),
+    WriteField(usize),
+    Done,
+}
+
 /// The resolve operation.
+///
+/// Verifies fields in the identity volume and writes them at the output path.
 /// Every field is evaluated, so a single run reports everything wrong with
 /// the volume rather than only the first fault.
 #[derive(Debug)]
 pub struct Resolve<'s> {
     schema: &'s Schema,
     mode: Mode,
-    current_field_index: usize,
+    phase: ResolvePhase,
+    values: Vec<Vec<u8>>,
     rejections: Vec<Rejection>,
+    failure: Option<ResolveError>,
 }
 
 impl<'s> Resolve<'s> {
@@ -105,30 +157,53 @@ impl<'s> Resolve<'s> {
         Resolve {
             schema,
             mode,
-            current_field_index: 0,
+            phase: ResolvePhase::ReadField(0),
+            values: Vec::new(),
             rejections: Vec::new(),
+            failure: None,
         }
     }
 
     pub fn step(&mut self) -> Step<'_, 's> {
-        if self.mode == Mode::Write {
-            return Step::Done(Err(ResolveError::UnimplementedWrite));
+        if let Some(failure) = self.failure.take() {
+            return Step::Done(Err(failure));
         }
-        match self.schema.fields().get(self.current_field_index) {
-            Some(field) => Step::ReadValue(ReadValue {
-                resolve: self,
-                field,
-            }),
-            None => Step::Done(self.verdict()),
+        match self.phase {
+            ResolvePhase::ReadField(at) => match self.schema.fields().get(at) {
+                Some(field) => Step::ReadValue(ReadValue {
+                    resolve: self,
+                    field,
+                    current_field_idx: at,
+                }),
+                None => self.verdict(),
+            },
+            ResolvePhase::WriteField(at) => match self.schema.fields().get(at) {
+                Some(field) => Step::WriteValue(WriteValue {
+                    resolve: self,
+                    field,
+                    current_field_idx: at,
+                }),
+                None => Step::Done(Ok(())),
+            },
+            ResolvePhase::Done => Step::Done(Ok(())),
         }
     }
 
-    fn verdict(&mut self) -> Result<(), ResolveError> {
+    fn verdict(&mut self) -> Step<'_, 's> {
         let rejections = std::mem::take(&mut self.rejections);
-        if rejections.is_empty() {
-            Ok(())
-        } else {
-            Err(ResolveError::Unsatisfied(rejections))
+        if !rejections.is_empty() {
+            self.phase = ResolvePhase::Done;
+            return Step::Done(Err(ResolveError::Unsatisfied(rejections)));
+        }
+        match self.mode {
+            Mode::EvaluateOnly => {
+                self.phase = ResolvePhase::Done;
+                Step::Done(Ok(()))
+            }
+            Mode::Write => {
+                self.phase = ResolvePhase::WriteField(0);
+                self.step()
+            }
         }
     }
 }
@@ -151,9 +226,17 @@ mod tests {
         Schema::new(fixtures::schema(fields)).unwrap()
     }
 
-    fn drive(schema: &Schema, answers: Vec<Answer>) -> Result<(), ResolveError> {
+    /// The path and bytes a run provisioned at the output.
+    type Provisioned = Vec<(String, Vec<u8>)>;
+
+    fn drive(
+        schema: &Schema,
+        mode: Mode,
+        answers: Vec<Answer>,
+    ) -> (Result<(), ResolveError>, Provisioned) {
         let mut answers = answers.into_iter();
-        let mut resolve = Resolve::new(schema, Mode::EvaluateOnly);
+        let mut written = Vec::new();
+        let mut resolve = Resolve::new(schema, mode);
         loop {
             match resolve.step() {
                 Step::ReadValue(read) => match answers.next().unwrap() {
@@ -161,9 +244,17 @@ mod tests {
                     Answer::Absent => read.absent(),
                     Answer::Unreadable(why) => read.unreadable(why.to_owned()),
                 },
-                Step::Done(verdict) => return verdict,
+                Step::WriteValue(write) => {
+                    written.push((write.path().as_str().to_owned(), write.value().to_vec()));
+                    write.written();
+                }
+                Step::Done(verdict) => return (verdict, written),
             }
         }
+    }
+
+    fn evaluate(schema: &Schema, answers: Vec<Answer>) -> Result<(), ResolveError> {
+        drive(schema, Mode::EvaluateOnly, answers).0
     }
 
     #[test]
@@ -192,27 +283,27 @@ mod tests {
     #[test]
     fn a_volume_holding_every_value_satisfies_the_schema() {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
-        assert!(drive(&schema, vec![Answer::Value(MACHINE_ID)]).is_ok());
+        assert!(evaluate(&schema, vec![Answer::Value(MACHINE_ID)]).is_ok());
     }
 
     #[test]
     fn a_missing_value_is_rejected() {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
-        let err = drive(&schema, vec![Answer::Absent]).unwrap_err();
+        let err = evaluate(&schema, vec![Answer::Absent]).unwrap_err();
         assert_eq!(err.to_string(), "/machine-id: required but missing");
     }
 
     #[test]
     fn a_value_that_cannot_be_read_is_rejected() {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
-        let err = drive(&schema, vec![Answer::Unreadable("denied")]).unwrap_err();
+        let err = evaluate(&schema, vec![Answer::Unreadable("denied")]).unwrap_err();
         assert_eq!(err.to_string(), "/machine-id: could not be read: denied");
     }
 
     #[test]
     fn a_value_its_type_refuses_is_rejected() {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
-        let err = drive(&schema, vec![Answer::Value(b"nope")]).unwrap_err();
+        let err = evaluate(&schema, vec![Answer::Value(b"nope")]).unwrap_err();
         assert_eq!(
             err.to_string(),
             "/machine-id: expected 32 characters, found 4"
@@ -225,7 +316,7 @@ mod tests {
             fixtures::field("/machine-id", "machine-id"),
             fixtures::field("/other-id", "machine-id"),
         ]);
-        let err = drive(&schema, vec![Answer::Absent, Answer::Value(b"nope")]).unwrap_err();
+        let err = evaluate(&schema, vec![Answer::Absent, Answer::Value(b"nope")]).unwrap_err();
         assert_eq!(
             err.to_string(),
             "/machine-id: required but missing\n\
@@ -234,12 +325,77 @@ mod tests {
     }
 
     #[test]
-    fn writing_the_values_is_not_implemented() {
-        let schema = schema(vec![]);
+    fn evaluating_only_writes_nothing() {
+        let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
+        let (verdict, written) =
+            drive(&schema, Mode::EvaluateOnly, vec![Answer::Value(MACHINE_ID)]);
+        assert!(verdict.is_ok());
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn accepted_values_are_provisioned_at_the_output() {
+        let schema = schema(vec![
+            fixtures::field("/machine-id", "machine-id"),
+            fixtures::field("/other-id", "machine-id"),
+        ]);
+        let (verdict, written) = drive(
+            &schema,
+            Mode::Write,
+            vec![Answer::Value(MACHINE_ID), Answer::Value(MACHINE_ID)],
+        );
+
+        assert!(verdict.is_ok());
+        assert_eq!(
+            written,
+            vec![
+                ("/machine-id".to_owned(), MACHINE_ID.to_vec()),
+                ("/other-id".to_owned(), MACHINE_ID.to_vec()),
+            ]
+        );
+    }
+
+    /// One bad field costs the whole volume: the output is never touched.
+    #[test]
+    fn a_volume_that_fails_its_schema_provisions_nothing() {
+        let schema = schema(vec![
+            fixtures::field("/machine-id", "machine-id"),
+            fixtures::field("/other-id", "machine-id"),
+        ]);
+        let (verdict, written) = drive(
+            &schema,
+            Mode::Write,
+            vec![Answer::Value(MACHINE_ID), Answer::Absent],
+        );
+
+        assert!(verdict.is_err());
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn a_write_that_fails_ends_the_run() {
+        let schema = schema(vec![
+            fixtures::field("/machine-id", "machine-id"),
+            fixtures::field("/other-id", "machine-id"),
+        ]);
         let mut resolve = Resolve::new(&schema, Mode::Write);
-        assert!(matches!(
-            resolve.step(),
-            Step::Done(Err(ResolveError::UnimplementedWrite))
-        ));
+        let mut written = Vec::new();
+
+        let verdict = loop {
+            match resolve.step() {
+                Step::ReadValue(read) => read.found(MACHINE_ID),
+                Step::WriteValue(write) => {
+                    written.push(write.path().as_str().to_owned());
+                    write.failed("disk full".to_owned());
+                }
+                Step::Done(verdict) => break verdict,
+            }
+        };
+
+        assert_eq!(written, vec!["/machine-id"]);
+        assert_eq!(
+            verdict.unwrap_err().to_string(),
+            "/machine-id: could not be written: disk full"
+        );
     }
 }

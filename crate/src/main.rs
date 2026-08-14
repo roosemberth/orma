@@ -22,8 +22,8 @@ enum SubCmd {
     Resolve(ResolveCmd),
 }
 
-/// Check the volume at <volume> against <schema>, laying the values it
-/// declares at <output>. With --evaluate-only, <output> may be omitted.
+/// Check the volume at <volume> against <schema>, provisioning the values
+/// it declares at <output>. With --evaluate-only, <output> may be omitted.
 #[derive(FromArgs)]
 #[argh(subcommand, name = "resolve")]
 struct ResolveCmd {
@@ -77,30 +77,49 @@ fn run_resolve(cmd: ResolveCmd) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let mode = match output {
+    let mode = match &output {
+        Some(output) if !output.is_dir() => {
+            eprintln!("{}: not a directory", output.display());
+            return ExitCode::from(1);
+        }
         Some(_) => Mode::Write,
         None => Mode::EvaluateOnly,
     };
 
-    match drive_resolve(Resolve::new(&schema, mode), &cmd.volume) {
+    let resolve = Resolve::new(&schema, mode);
+    match drive_resolve(resolve, &cmd.volume, output.as_deref()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
             match err {
                 ResolveError::Unsatisfied(_) => ExitCode::from(2),
-                ResolveError::UnimplementedWrite => ExitCode::from(3),
+                ResolveError::WriteFailed { .. } => ExitCode::from(1),
             }
         }
     }
 }
 
-fn drive_resolve(mut resolve: Resolve, volume: &Path) -> Result<(), ResolveError> {
+fn drive_resolve(
+    mut resolve: Resolve,
+    volume: &Path,
+    output: Option<&Path>,
+) -> Result<(), ResolveError> {
     loop {
         match resolve.step() {
             Step::ReadValue(request) => match volume::read(volume, request.path()) {
                 Ok(value) => request.found(&value),
                 Err(volume::ReadError::Absent) => request.absent(),
                 Err(volume::ReadError::Unreadable(err)) => request.unreadable(err.to_string()),
+            },
+            Step::WriteValue(request) => match output {
+                Some(output) => {
+                    let provisioned = volume::write(output, request.path(), request.value());
+                    match provisioned {
+                        Ok(()) => request.written(),
+                        Err(err) => request.failed(err.to_string()),
+                    }
+                }
+                None => request.failed("no output path was given".to_owned()),
             },
             Step::Done(verdict) => return verdict,
         }

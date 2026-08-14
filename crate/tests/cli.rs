@@ -1,9 +1,12 @@
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use assert_cmd::Command;
 use assert_fs::TempDir;
 use assert_fs::prelude::*;
 use predicates::prelude::*;
+
+const MACHINE_ID: &str = "d2c8e7e9a4b34d62b8f8a0c5e9d7f3b1";
 
 fn orma() -> Command {
     Command::cargo_bin("orma").unwrap()
@@ -15,16 +18,21 @@ fn fixture(name: &str) -> PathBuf {
         .collect()
 }
 
-/// Evaluate `schema` against a volume holding `values`: for each, a path the
-/// schema declares and the bytes stored there.
-fn evaluate(schema: &str, values: &[(&str, &str)]) -> assert_cmd::assert::Assert {
+/// Returns a volume holding `values` at the specified paths.
+fn volume(path_and_values: &[(&str, &str)]) -> TempDir {
     let volume = TempDir::new().unwrap();
-    for (path, value) in values {
+    for (path, value) in path_and_values {
         volume
             .child(path.trim_start_matches('/'))
             .write_str(value)
             .unwrap();
     }
+    volume
+}
+
+/// Run orma resolve and evaluate `schema` against `values`.
+fn evaluate(schema: &str, values: &[(&str, &str)]) -> assert_cmd::assert::Assert {
+    let volume = volume(values);
     orma()
         .arg("resolve")
         .arg(fixture(schema))
@@ -104,7 +112,6 @@ fn a_schema_declaring_nothing_is_satisfied() {
 
 #[test]
 fn a_volume_holding_the_declared_values_is_satisfied() {
-    const MACHINE_ID: &str = "d2c8e7e9a4b34d62b8f8a0c5e9d7f3b1";
     evaluate("schema-example.yaml", &[("/machine-id", MACHINE_ID)]).success();
 }
 
@@ -125,4 +132,68 @@ fn a_value_of_the_wrong_shape_fails_the_volume() {
     )
     .code(2)
     .stderr(predicate::str::contains("/machine-id: expected 32"));
+}
+
+#[test]
+fn an_output_that_is_not_a_directory_is_a_usage_error() {
+    let volume = volume(&[]);
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-empty.yaml"))
+        .arg(volume.path())
+        .arg("no-such-output")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("not a directory"));
+}
+
+#[test]
+fn accepted_values_are_provisioned_at_the_output() {
+    let volume = volume(&[("/machine-id", MACHINE_ID)]);
+    let output = TempDir::new().unwrap();
+
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-example.yaml"))
+        .arg(volume.path())
+        .arg(output.path())
+        .assert()
+        .success();
+
+    output.child("machine-id").assert(MACHINE_ID);
+}
+
+#[test]
+fn provisioned_values_are_only_readable_by_its_owner() {
+    let volume = volume(&[("/machine-id", MACHINE_ID)]);
+    let output = TempDir::new().unwrap();
+
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-example.yaml"))
+        .arg(volume.path())
+        .arg(output.path())
+        .assert()
+        .success();
+
+    let provisioned = std::fs::metadata(output.child("machine-id").path()).unwrap();
+    assert_eq!(provisioned.permissions().mode() & 0o777, 0o600);
+}
+
+#[test]
+fn a_volume_that_fails_its_schema_provisions_nothing() {
+    let volume = volume(&[]);
+    let output = TempDir::new().unwrap();
+
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-example.yaml"))
+        .arg(volume.path())
+        .arg(output.path())
+        .assert()
+        .code(2);
+
+    output
+        .child("machine-id")
+        .assert(predicate::path::missing());
 }
