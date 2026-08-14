@@ -324,3 +324,29 @@ fn passphrases_that_differ_leave_the_volume_alone() {
         .child("user.passwd")
         .assert(predicate::path::missing());
 }
+
+#[test]
+fn generate_schema_with_every_field_type() {
+    let volume = volume(&[]);
+    let output = TempDir::new().unwrap();
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .write_stdin(PASSPHRASE)
+        .assert()
+        .success();
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg(output.path())
+        .assert()
+        .success();
+    output
+        .child("machine-id")
+        .assert(predicate::str::is_match(r"^[0-9a-f]{32}\n?$").unwrap());
+    output
+        .child("user.passwd")
+        .assert(predicate::str::starts_with("$y$"));
+}
