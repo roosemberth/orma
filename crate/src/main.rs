@@ -114,7 +114,10 @@ fn drive_generate(mut generate: Generate, volume: &Path) -> Result<(), GenerateE
                 Err(err) => request.failed(err.to_string()),
             },
             Step::HashPassphrase(request) => {
-                let hashed = passphrase::prompt_passphrase_and_hash(request.path().as_str());
+                let hashed = passphrase::prompt_passphrase_and_hash(
+                    request.path().as_str(),
+                    request.description(),
+                );
                 match hashed {
                     Ok(record) => request.hashed(&record),
                     Err(err) => request.failed(err.to_string()),

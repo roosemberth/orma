@@ -284,7 +284,9 @@ fn generate_asks_for_a_passphrase_and_stores_its_hash() {
         .write_stdin(PASSPHRASE)
         .assert()
         .success()
-        .stderr(predicate::str::contains("Passphrase for /user.passwd: "));
+        .stderr(predicate::str::contains(
+            "User password\nPassphrase for /user.passwd: ",
+        ));
     volume
         .child("user.passwd")
         .assert(predicate::str::starts_with("$y$"));

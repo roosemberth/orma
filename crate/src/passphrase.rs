@@ -13,9 +13,18 @@ pub enum Error {
     MkPasswd(String),
 }
 
-/// Ask the operator for the passphrase guarding `label`, and hash it.
-pub fn prompt_passphrase_and_hash(label: &str) -> Result<Vec<u8>, Error> {
-    let passphrase = ask(&format!("Passphrase for {label}: "))?;
+/// Ask the operator for the passphrase guarding `field`, and hash it.
+/// If the description is present, is describes the field before prompting.
+pub fn prompt_passphrase_and_hash(
+    field: &str,
+    description: Option<&str>,
+) -> Result<Vec<u8>, Error> {
+    if let Some(description) = description {
+        let mut err = stderr();
+        writeln!(err, "{}", description.trim_end()).ok();
+        err.flush().ok();
+    }
+    let passphrase = ask(&format!("Passphrase for {field}: "))?;
     if passphrase != ask("Confirm: ")? {
         return Err(Error::Mismatch);
     }

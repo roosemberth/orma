@@ -4,6 +4,8 @@ fields:
     type: machine-id
   - path: /user.passwd
     type: hashed-password
+    description: Device user password, also accepted at the initramfs unlock prompt
   - path: /sudo.passwd
     type: hashed-password
+    description: Administrative password; sudo falls back to the user password when absent
     optional: true

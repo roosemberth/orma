@@ -94,6 +94,10 @@ impl<'s> GetHashedPassphrase<'_, 's> {
         self.field.path()
     }
 
+    pub fn description(&self) -> Option<&'s str> {
+        self.field.description()
+    }
+
     /// Record the hashed passphrase.
     pub fn hashed(self, record: &[u8]) {
         let field = self.field;
