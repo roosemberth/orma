@@ -101,7 +101,7 @@ fn a_type_orma_does_not_implement_is_refused() {
     evaluate("schema-unknown-type.yaml", &[])
         .code(3)
         .stderr(predicate::str::contains(
-            "/user.passwd: field type 'hashed-password' is not implemented",
+            "/ssh/host_ed25519_key: field type 'ssh-host-key' is not implemented",
         ));
 }
 
@@ -249,4 +249,43 @@ fn generate_refuses_to_overwrite() {
         .stderr(predicate::str::contains("would overwrite:\n/machine-id"));
 
     volume.child("machine-id").assert(MACHINE_ID);
+}
+
+const CRYPT_RECORD: &str = "$y$j9T$saltSaltSalt$hashHashHashHash";
+
+#[test]
+fn a_volume_holding_a_crypt_record_is_satisfied() {
+    evaluate(
+        "schema-hashed-password.yaml",
+        &[("/user.passwd", CRYPT_RECORD)],
+    )
+    .success();
+}
+
+#[test]
+fn a_value_that_is_not_a_crypt_record_fails_the_volume() {
+    evaluate(
+        "schema-hashed-password.yaml",
+        &[("/user.passwd", "hunter2")],
+    )
+    .code(2)
+    .stderr(predicate::str::contains("/user.passwd: not a crypt record"));
+}
+
+#[test]
+fn generate_refuses_a_type_it_cannot_produce() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-hashed-password.yaml"))
+        .arg(volume.path())
+        .assert()
+        .code(3)
+        .stderr(predicate::str::contains(
+            "/user.passwd: producing a 'hashed-password' is not implemented",
+        ));
+
+    volume
+        .child("user.passwd")
+        .assert(predicate::path::missing());
 }

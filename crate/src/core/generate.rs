@@ -126,6 +126,11 @@ pub enum GenerateError {
     Failed { path: FieldPath, why: String },
     #[error("{path}: produced a value its own type refuses: {reason}")]
     Unusable { path: FieldPath, reason: Invalid },
+    #[error("{path}: producing a '{type_name}' is not implemented")]
+    Unable {
+        path: FieldPath,
+        type_name: &'static str,
+    },
 }
 
 #[derive(Debug)]
@@ -175,13 +180,21 @@ impl<'s> Generate<'s> {
             },
             GeneratePhase::MakeField(at) => match self.schema.fields().get(at) {
                 Some(field) => match field.kind().recipe() {
-                    Recipe::FromEntropy { bytes, build } => Step::DrawEntropy(DrawEntropy {
+                    Some(Recipe::FromEntropy { bytes, build }) => Step::DrawEntropy(DrawEntropy {
                         generate: self,
                         field,
                         current_field_idx: at,
                         bytes,
                         build,
                     }),
+                    None => {
+                        self.failure = Some(GenerateError::Unable {
+                            path: field.path().clone(),
+                            type_name: field.kind().name(),
+                        });
+                        self.phase = GeneratePhase::Done;
+                        self.step()
+                    }
                 },
                 None => {
                     self.phase = GeneratePhase::WriteField(0);
