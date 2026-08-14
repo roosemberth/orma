@@ -7,9 +7,10 @@ mod core;
 mod passphrase;
 mod random;
 mod schema_file;
+mod tool;
 mod volume;
 
-use core::generate::{Generate, GenerateError};
+use core::generate::{CheckValue, DrawEntropy, Generate, GenerateError};
 use core::resolve::{Mode, Resolve, ResolveError, Step};
 
 /// Loads a system's passwords and keys at boot from a separate volume.
@@ -60,6 +61,10 @@ struct GenerateCmd {
     /// path where the unlocked volume is mounted
     #[argh(positional)]
     volume: PathBuf,
+
+    /// check what running could have carried out
+    #[argh(switch)]
+    dry_run: bool,
 }
 
 fn main() -> ExitCode {
@@ -87,16 +92,65 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
         return ExitCode::from(1);
     }
 
+    // Always dry-run before performing.
+    if let Err(err) = rehearse_generate(Generate::new(&schema), &cmd.volume) {
+        eprintln!("{err}");
+        return generate_exit(&err);
+    }
+    if cmd.dry_run {
+        return ExitCode::SUCCESS;
+    }
+
     match drive_generate(Generate::new(&schema), &cmd.volume) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
-            match err {
-                GenerateError::AlreadyHeld(_) => ExitCode::from(2),
-                GenerateError::Unable { .. } => ExitCode::from(3),
-                _ => ExitCode::from(1),
-            }
+            generate_exit(&err)
         }
+    }
+}
+
+fn generate_exit(err: &GenerateError) -> ExitCode {
+    match err {
+        GenerateError::AlreadyHeld(_) => ExitCode::from(2),
+        GenerateError::Unable { .. } => ExitCode::from(3),
+        _ => ExitCode::from(1),
+    }
+}
+
+/// Drive generate without actually writing anything. Most steps are innocuously
+/// exercised so we can check if they are likely to run in the real drive.
+fn rehearse_generate(mut generate: Generate, volume: &Path) -> Result<(), GenerateError> {
+    use core::generate::Step;
+    loop {
+        match generate.step() {
+            Step::CheckValue(request) => answer_check(volume, request),
+            Step::DrawEntropy(request) => answer_draw(request),
+            Step::HashPassphrase(request) => {
+                const REHEARSAL: &str = "orma rehearsal";
+                match passphrase::crypt_record(REHEARSAL) {
+                    Ok(record) => request.hashed(&record),
+                    Err(err) => request.failed(err.to_string()),
+                }
+            }
+            Step::WriteValue(request) => request.written(),
+            Step::Done(outcome) => return outcome,
+        }
+    }
+}
+
+fn answer_check(volume: &Path, request: CheckValue) {
+    match volume::read(volume, request.path()) {
+        Ok(value) => request.present(&value),
+        Err(volume::ReadError::Absent) => request.absent(),
+        Err(volume::ReadError::Unreadable(err)) => request.failed(err.to_string()),
+    }
+}
+
+fn answer_draw(request: DrawEntropy) {
+    match random::draw(request.wanted()) {
+        Ok(entropy) => request.filled(&entropy),
+        Err(err) => request.failed(err.to_string()),
     }
 }
 
@@ -104,15 +158,8 @@ fn drive_generate(mut generate: Generate, volume: &Path) -> Result<(), GenerateE
     use core::generate::Step;
     loop {
         match generate.step() {
-            Step::CheckValue(request) => match volume::read(volume, request.path()) {
-                Ok(value) => request.present(&value),
-                Err(volume::ReadError::Absent) => request.absent(),
-                Err(volume::ReadError::Unreadable(err)) => request.failed(err.to_string()),
-            },
-            Step::DrawEntropy(request) => match random::draw(request.wanted()) {
-                Ok(entropy) => request.filled(&entropy),
-                Err(err) => request.failed(err.to_string()),
-            },
+            Step::CheckValue(request) => answer_check(volume, request),
+            Step::DrawEntropy(request) => answer_draw(request),
             Step::HashPassphrase(request) => {
                 let hashed = passphrase::prompt_passphrase_and_hash(
                     request.path().as_str(),

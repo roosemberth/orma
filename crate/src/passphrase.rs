@@ -1,7 +1,9 @@
 //! Ask the operator for a passphrase
 
 use std::io::{BufRead, IsTerminal, Write, stderr, stdin};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
+
+use crate::tool::Tool;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -9,8 +11,8 @@ pub enum Error {
     Unheard(std::io::Error),
     #[error("passphrases do not match")]
     Mismatch,
-    #[error("mkpasswd: {0}")]
-    MkPasswd(String),
+    #[error(transparent)]
+    Tool(#[from] crate::tool::Error),
 }
 
 /// Ask the operator for the passphrase guarding `field`, and hash it.
@@ -28,7 +30,7 @@ pub fn prompt_passphrase_and_hash(
     if passphrase != ask("Confirm: ")? {
         return Err(Error::Mismatch);
     }
-    mkpasswd(&passphrase)
+    crypt_record(&passphrase)
 }
 
 /// Print the prompt to stderr to keep it out of anything redirecting stdout.
@@ -47,27 +49,28 @@ fn ask(prompt: &str) -> Result<String, Error> {
     Ok(line.trim_end_matches(['\n', '\r']).to_owned())
 }
 
-fn mkpasswd(passphrase: &str) -> Result<Vec<u8>, Error> {
-    let mut child = Command::new("mkpasswd")
+pub fn crypt_record(passphrase: &str) -> Result<Vec<u8>, Error> {
+    let mkpasswd = Tool::MKPASSWD;
+    let mut child = mkpasswd
+        .command()
         .args(["-m", "yescrypt", "-s"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|err| Error::MkPasswd(format!("could not be started: {err}")))?;
+        .map_err(|err| mkpasswd.failed(format!("could not be started: {err}")))?;
 
     if let Some(mut sink) = child.stdin.take() {
         sink.write_all(passphrase.as_bytes())
-            .map_err(|err| Error::MkPasswd(err.to_string()))?;
+            .map_err(|err| mkpasswd.failed(err))?;
     }
 
     let hashed = child
         .wait_with_output()
-        .map_err(|err| Error::MkPasswd(err.to_string()))?;
+        .map_err(|err| mkpasswd.failed(err))?;
     if !hashed.status.success() {
-        return Err(Error::MkPasswd(
-            String::from_utf8_lossy(&hashed.stderr).trim().to_owned(),
-        ));
+        let complaint = String::from_utf8_lossy(&hashed.stderr);
+        return Err(mkpasswd.failed(complaint.trim()).into());
     }
     Ok(hashed.stdout)
 }
