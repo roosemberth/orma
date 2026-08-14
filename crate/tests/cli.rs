@@ -423,3 +423,35 @@ fn a_dry_run_reports_a_volume_it_could_not_populate() {
         .code(2)
         .stderr(predicate::str::contains("the volume already holds"));
 }
+
+#[test]
+fn an_unknown_way_to_ask_is_a_usage_error() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-hashed-password.yaml"))
+        .arg(volume.path())
+        .arg("--ask-via")
+        .arg("telepathy")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("unknown way to ask 'telepathy'"));
+}
+
+#[test]
+fn asking_through_a_missing_agent_is_reported() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-hashed-password.yaml"))
+        .arg(volume.path())
+        .args(["--ask-via", "systemd-ask-password"])
+        // Ensure systemd-ask-password is not in PATH.
+        .env("PATH", "")
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("systemd-ask-password"));
+    volume
+        .child("user.passwd")
+        .assert(predicate::path::missing());
+}
