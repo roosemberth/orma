@@ -16,6 +16,8 @@ pub mod file {
         pub type_name: String,
         #[serde(default)]
         pub optional: bool,
+        #[serde(default)]
+        pub description: Option<String>,
     }
 
     #[cfg(test)]
@@ -27,6 +29,14 @@ pub mod file {
                 path: path.to_owned(),
                 type_name: type_name.to_owned(),
                 optional: false,
+                description: None,
+            }
+        }
+
+        pub fn described_field(path: &str, type_name: &str, description: &str) -> Field {
+            Field {
+                description: Some(description.to_owned()),
+                ..field(path, type_name)
             }
         }
 
@@ -74,6 +84,7 @@ impl Schema {
                 path,
                 kind,
                 optional: field.optional,
+                description: field.description,
             });
         }
 
@@ -90,6 +101,7 @@ pub struct Field {
     path: FieldPath,
     kind: FieldKind,
     optional: bool,
+    description: Option<String>,
 }
 
 impl Field {
@@ -103,6 +115,10 @@ impl Field {
 
     pub fn is_optional(&self) -> bool {
         self.optional
+    }
+
+    pub fn description(&self) -> Option<&str> {
+        self.description.as_deref()
     }
 }
 
@@ -195,6 +211,24 @@ mod tests {
 
     fn schema(fields: Vec<file::Field>) -> Result<Schema, SchemaError> {
         Schema::new(fixtures::schema(fields))
+    }
+
+    #[test]
+    fn a_field_may_say_what_it_is_for() {
+        let schema = schema(vec![
+            fixtures::described_field(
+                "/user.passwd",
+                "hashed-password",
+                "Device user password,\nalso accepted at the initramfs prompt",
+            ),
+            fixtures::field("/sudo.passwd", "hashed-password"),
+        ])
+        .unwrap();
+        assert_eq!(
+            schema.fields()[0].description(),
+            Some("Device user password,\nalso accepted at the initramfs prompt")
+        );
+        assert_eq!(schema.fields()[1].description(), None);
     }
 
     #[test]
