@@ -1,0 +1,83 @@
+stages:
+  - build
+  - check
+
+.nix:
+  image: nixos/nix:2.28.0
+  needs: []
+  variables:
+    NIX_CONFIG: |
+      experimental-features = nix-command flakes
+  before_script:
+    - |
+      if [ -n "${NIXBUILDNET_TOKEN:-}" ]; then
+        mkdir -p ~/.ssh ~/.config/nix
+        cat > ~/.ssh/config <<'EOF'
+      Host eu.nixbuild.net
+        User authtoken
+        PreferredAuthentications none
+        SendEnv NIXBUILDNET_TOKEN
+        ServerAliveInterval 60
+        LogLevel ERROR
+        IPQoS throughput
+      EOF
+        chmod 600 ~/.ssh/config
+        echo 'eu.nixbuild.net ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPIQCZc54poJ8vqawd8TraNryQeJnvH1eLpIDgbiqymM' >> ~/.ssh/known_hosts
+        chmod 600 ~/.ssh/known_hosts
+        cat > ~/.config/nix/nix.conf <<'EOF'
+      extra-substituters = ssh-ng://eu.nixbuild.net
+      extra-trusted-public-keys = nixbuild.net/JRWTER-1:TA0naisIeuntbToSnGROCMAAb/gh6WTS3B9qfCxfunI=
+      builders = ssh-ng://eu.nixbuild.net x86_64-linux - 100 1 benchmark,big-parallel,kvm,nixos-test
+      builders-use-substitutes = true
+      EOF
+        echo "nixbuild.net configured as remote builder + substituter"
+      else
+        echo "NIXBUILDNET_TOKEN unset; building locally"
+      fi
+    - |
+      NIXPKGS_REV=$(nix-instantiate --eval --raw -E \
+        '(builtins.fromJSON (builtins.readFile ./devenv.lock)).nodes.nixpkgs.locked.rev')
+      export NIX_PATH="nixpkgs=https://github.com/NixOS/nixpkgs/archive/$NIXPKGS_REV.tar.gz"
+      echo "Using nixpkgs $NIXPKGS_REV (from devenv.lock)"
+    - |
+      build() {
+        if [ -n "${NIXBUILDNET_TOKEN:-}" ]; then
+          nix build --store ssh-ng://eu.nixbuild.net --eval-store auto \
+            -f nix/orma.nix "$1" --no-link -L
+        else
+          nix build -f nix/orma.nix "$1" --no-link -L
+        fi
+      }
+      fetch() {
+        if [ -n "${NIXBUILDNET_TOKEN:-}" ]; then
+          out=$(nix path-info --eval-store auto \
+            --store ssh-ng://eu.nixbuild.net -f nix/orma.nix "$1")
+          nix copy --no-check-sigs --from ssh-ng://eu.nixbuild.net "$out" >&2
+        else
+          out=$(nix path-info -f nix/orma.nix "$1")
+        fi
+        echo "$out"
+      }
+
+orma:
+  extends: .nix
+  stage: build
+  script:
+    - build orma
+    - cp -rL "$(fetch orma)" orma
+  artifacts:
+    paths:
+      - orma
+    expire_in: 1 week
+
+clippy:
+  extends: .nix
+  stage: check
+  script:
+    - build clippy
+
+fmt:
+  extends: .nix
+  stage: check
+  script:
+    - build fmt
