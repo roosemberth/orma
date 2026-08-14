@@ -1,0 +1,8 @@
+version: 1
+fields:
+  - path: /machine-id
+    type: machine-id
+  - path: /user.passwd
+    type: hashed-password
+  - path: /sudo.passwd
+    type: hashed-password
