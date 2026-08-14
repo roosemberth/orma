@@ -4,6 +4,7 @@ use std::process::ExitCode;
 use argh::FromArgs;
 
 mod core;
+mod schema_file;
 
 /// Loads a system's passwords and keys at boot from a separate volume.
 #[derive(FromArgs)]
@@ -57,10 +58,21 @@ fn run_resolve(cmd: ResolveCmd) -> ExitCode {
         }
     };
 
-    // FIXME: consumed when resolve learns to read its schema and its volume.
-    let _ = (&cmd.schema, &cmd.volume, &output);
+    let schema = match schema_file::read(&cmd.schema) {
+        Ok(schema) => schema,
+        Err(err) => {
+            eprintln!("{err}");
+            return match err {
+                schema_file::Error::Schema(_) => ExitCode::from(3),
+                _ => ExitCode::from(1),
+            };
+        }
+    };
 
-    match core::resolve::resolve() {
+    // FIXME: consumed when resolve learns to read its volume.
+    let _ = (&cmd.volume, &output);
+
+    match core::resolve::resolve(&schema) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
