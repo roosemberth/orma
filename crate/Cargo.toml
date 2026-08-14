@@ -3,6 +3,7 @@ name = "orma"
 version = "0.1.0"
 edition = "2024"
 description = "Loads a stateless system's passwords and keys at boot from a separate volume"
+license = "GPL-3.0-or-later"
 
 [profile.release]
 codegen-units = 1
