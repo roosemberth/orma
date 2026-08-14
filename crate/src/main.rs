@@ -12,6 +12,7 @@ mod volume;
 
 use core::generate::{CheckValue, DrawEntropy, Generate, GenerateError};
 use core::resolve::{Mode, Resolve, ResolveError, Step};
+use passphrase::AskVia;
 
 /// Loads a system's passwords and keys at boot from a separate volume.
 #[derive(FromArgs)]
@@ -65,6 +66,10 @@ struct GenerateCmd {
     /// check what running could have carried out
     #[argh(switch)]
     dry_run: bool,
+
+    /// how to prompt the operator
+    #[argh(option, default = "AskVia::Tty")]
+    ask_via: AskVia,
 }
 
 fn main() -> ExitCode {
@@ -93,7 +98,7 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
     }
 
     // Always dry-run before performing.
-    if let Err(err) = rehearse_generate(Generate::new(&schema), &cmd.volume) {
+    if let Err(err) = rehearse_generate(Generate::new(&schema), &cmd.volume, cmd.ask_via) {
         eprintln!("{err}");
         return generate_exit(&err);
     }
@@ -101,7 +106,7 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    match drive_generate(Generate::new(&schema), &cmd.volume) {
+    match drive_generate(Generate::new(&schema), &cmd.volume, cmd.ask_via) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
@@ -120,15 +125,18 @@ fn generate_exit(err: &GenerateError) -> ExitCode {
 
 /// Drive generate without actually writing anything. Most steps are innocuously
 /// exercised so we can check if they are likely to run in the real drive.
-fn rehearse_generate(mut generate: Generate, volume: &Path) -> Result<(), GenerateError> {
+fn rehearse_generate(
+    mut generate: Generate,
+    volume: &Path,
+    ask_via: AskVia,
+) -> Result<(), GenerateError> {
     use core::generate::Step;
     loop {
         match generate.step() {
             Step::CheckValue(request) => answer_check(volume, request),
             Step::DrawEntropy(request) => answer_draw(request),
             Step::HashPassphrase(request) => {
-                const REHEARSAL: &str = "orma rehearsal";
-                match passphrase::crypt_record(REHEARSAL) {
+                match passphrase::rehearse_passphrase_and_hash(ask_via) {
                     Ok(record) => request.hashed(&record),
                     Err(err) => request.failed(err.to_string()),
                 }
@@ -154,7 +162,11 @@ fn answer_draw(request: DrawEntropy) {
     }
 }
 
-fn drive_generate(mut generate: Generate, volume: &Path) -> Result<(), GenerateError> {
+fn drive_generate(
+    mut generate: Generate,
+    volume: &Path,
+    ask_via: AskVia,
+) -> Result<(), GenerateError> {
     use core::generate::Step;
     loop {
         match generate.step() {
@@ -164,6 +176,7 @@ fn drive_generate(mut generate: Generate, volume: &Path) -> Result<(), GenerateE
                 let hashed = passphrase::prompt_passphrase_and_hash(
                     request.path().as_str(),
                     request.description(),
+                    ask_via,
                 );
                 match hashed {
                     Ok(record) => request.hashed(&record),

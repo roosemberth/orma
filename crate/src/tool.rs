@@ -9,6 +9,7 @@ pub struct Tool(&'static str);
 
 impl Tool {
     pub const MKPASSWD: Tool = Tool("mkpasswd");
+    pub const SYSTEMD_ASK_PASSWORD: Tool = Tool("systemd-ask-password");
 
     pub fn command(self) -> Command {
         Command::new(self.0)
