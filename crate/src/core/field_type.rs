@@ -41,7 +41,7 @@ impl FieldKind {
                 bytes: 16,
                 build: build_machine_id,
             }),
-            FieldKind::HashedPassword => None,
+            FieldKind::HashedPassword => Some(Recipe::FromPassphrasePrompt),
         }
     }
 }
@@ -53,6 +53,7 @@ pub enum Recipe {
         bytes: usize,
         build: fn(&[u8]) -> Vec<u8>,
     },
+    FromPassphrasePrompt,
 }
 
 fn build_machine_id(entropy: &[u8]) -> Vec<u8> {
@@ -182,10 +183,12 @@ mod tests {
         assert!(FieldKind::MachineId.validate(&value).is_ok());
     }
 
-    /// Requires asking the operator for a passphrase, which orma cannot do yet.
     #[test]
-    fn a_hashed_password_has_no_recipe() {
-        assert!(FieldKind::HashedPassword.recipe().is_none());
+    fn a_hashed_password_is_made_from_a_passphrase() {
+        assert!(matches!(
+            FieldKind::HashedPassword.recipe(),
+            Some(Recipe::FromPassphrasePrompt)
+        ));
     }
 
     #[test]

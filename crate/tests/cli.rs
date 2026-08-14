@@ -272,19 +272,54 @@ fn a_value_that_is_not_a_crypt_record_fails_the_volume() {
     .stderr(predicate::str::contains("/user.passwd: not a crypt record"));
 }
 
+const PASSPHRASE: &str = "correct horse battery staple\ncorrect horse battery staple\n";
+
 #[test]
-fn generate_refuses_a_type_it_cannot_produce() {
+fn generate_asks_for_a_passphrase_and_stores_its_hash() {
     let volume = volume(&[]);
     orma()
         .arg("generate")
         .arg(fixture("schema-hashed-password.yaml"))
         .arg(volume.path())
+        .write_stdin(PASSPHRASE)
         .assert()
-        .code(3)
-        .stderr(predicate::str::contains(
-            "/user.passwd: producing a 'hashed-password' is not implemented",
-        ));
+        .success()
+        .stderr(predicate::str::contains("Passphrase for /user.passwd: "));
+    volume
+        .child("user.passwd")
+        .assert(predicate::str::starts_with("$y$"));
+}
 
+#[test]
+fn a_generated_password_satisfies_its_schema() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-hashed-password.yaml"))
+        .arg(volume.path())
+        .write_stdin(PASSPHRASE)
+        .assert()
+        .success();
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-hashed-password.yaml"))
+        .arg(volume.path())
+        .arg("--evaluate-only")
+        .assert()
+        .success();
+}
+
+#[test]
+fn passphrases_that_differ_leave_the_volume_alone() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-hashed-password.yaml"))
+        .arg(volume.path())
+        .write_stdin("one\nanother\n")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("passphrases do not match"));
     volume
         .child("user.passwd")
         .assert(predicate::path::missing());
