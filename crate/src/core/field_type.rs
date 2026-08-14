@@ -19,6 +19,34 @@ impl FieldKind {
             FieldKind::MachineId => validate_machine_id(value),
         }
     }
+
+    /// How a value of this type is produced.
+    pub fn recipe(&self) -> Recipe {
+        match self {
+            FieldKind::MachineId => Recipe::FromEntropy {
+                bytes: 16,
+                build: build_machine_id,
+            },
+        }
+    }
+}
+
+/// The recipe for the world to create a value.
+#[derive(Debug, Clone, Copy)]
+pub enum Recipe {
+    FromEntropy {
+        bytes: usize,
+        build: fn(&[u8]) -> Vec<u8>,
+    },
+}
+
+fn build_machine_id(entropy: &[u8]) -> Vec<u8> {
+    let mut value = String::with_capacity(33);
+    for byte in entropy {
+        value.push_str(&format!("{byte:02x}"));
+    }
+    value.push('\n');
+    value.into_bytes()
 }
 
 /// The value did not satisfy the field type validator.
@@ -55,6 +83,20 @@ mod tests {
 
     fn validate(value: &[u8]) -> Result<(), Invalid> {
         FieldKind::MachineId.validate(value)
+    }
+
+    #[test]
+    fn a_machine_id_is_made_out_of_sixteen_bytes_of_randomness() {
+        let entropy = [
+            0xd2, 0xc8, 0xe7, 0xe9, 0xa4, 0xb3, 0x4d, 0x62, //
+            0xb8, 0xf8, 0xa0, 0xc5, 0xe9, 0xd7, 0xf3, 0xb1,
+        ];
+        let Recipe::FromEntropy { bytes, build } = FieldKind::MachineId.recipe();
+        assert_eq!(bytes, entropy.len());
+
+        let value = build(&entropy);
+        assert_eq!(value, b"d2c8e7e9a4b34d62b8f8a0c5e9d7f3b1\n");
+        assert!(FieldKind::MachineId.validate(&value).is_ok());
     }
 
     #[test]

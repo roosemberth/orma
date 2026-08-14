@@ -23,6 +23,10 @@ pub fn read(volume: &Path, field: &FieldPath) -> Result<Vec<u8>, ReadError> {
     })
 }
 
+pub fn has_field_value(root: &Path, field: &FieldPath) -> std::io::Result<bool> {
+    std::fs::exists(locate(root, field))
+}
+
 /// Write the value for the specified field at the output path.
 /// The value is only accessible by the owner.
 pub fn write(root: &Path, field: &FieldPath, value: &[u8]) -> Result<(), WriteError> {
