@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use assert_cmd::Command;
+use assert_fs::TempDir;
+use assert_fs::prelude::*;
 use predicates::prelude::*;
 
 fn orma() -> Command {
@@ -11,6 +13,24 @@ fn fixture(name: &str) -> PathBuf {
     [env!("CARGO_MANIFEST_DIR"), "fixtures", name]
         .iter()
         .collect()
+}
+
+/// Evaluate `schema` against a volume holding `values`: for each, a path the
+/// schema declares and the bytes stored there.
+fn evaluate(schema: &str, values: &[(&str, &str)]) -> assert_cmd::assert::Assert {
+    let volume = TempDir::new().unwrap();
+    for (path, value) in values {
+        volume
+            .child(path.trim_start_matches('/'))
+            .write_str(value)
+            .unwrap();
+    }
+    orma()
+        .arg("resolve")
+        .arg(fixture(schema))
+        .arg(volume.path())
+        .arg("--evaluate-only")
+        .assert()
 }
 
 #[test]
@@ -50,37 +70,59 @@ fn an_unreadable_schema_is_a_usage_error() {
         .stderr(predicate::str::contains("no-such-schema.yaml"));
 }
 
-/// The volume is not consulted: a schema declaring nothing asks nothing of it.
 #[test]
-fn a_schema_declaring_nothing_is_satisfied() {
+fn a_volume_that_is_not_a_directory_is_a_usage_error() {
     orma()
         .arg("resolve")
         .arg(fixture("schema-empty.yaml"))
-        .args(["volume", "--evaluate-only"])
+        .args(["no-such-volume", "--evaluate-only"])
         .assert()
-        .success();
-}
-
-#[test]
-fn declared_fields_cannot_be_evaluated_yet() {
-    orma()
-        .arg("resolve")
-        .arg(fixture("schema-example.yaml"))
-        .args(["volume", "--evaluate-only"])
-        .assert()
-        .code(3)
-        .stderr(predicate::str::contains(
-            "/machine-id: field type 'machine-id' is not implemented",
-        ));
+        .code(1)
+        .stderr(predicate::str::contains("not a directory"));
 }
 
 #[test]
 fn an_unsupported_version_is_refused() {
-    orma()
-        .arg("resolve")
-        .arg(fixture("schema-unknown-version.yaml"))
-        .args(["volume", "--evaluate-only"])
-        .assert()
+    evaluate("schema-unknown-version.yaml", &[])
         .code(3)
         .stderr(predicate::str::contains("unsupported schema version: 2"));
+}
+
+#[test]
+fn a_type_orma_does_not_implement_is_refused() {
+    evaluate("schema-unknown-type.yaml", &[])
+        .code(3)
+        .stderr(predicate::str::contains(
+            "/user.passwd: field type 'hashed-password' is not implemented",
+        ));
+}
+
+#[test]
+fn a_schema_declaring_nothing_is_satisfied() {
+    evaluate("schema-empty.yaml", &[]).success();
+}
+
+#[test]
+fn a_volume_holding_the_declared_values_is_satisfied() {
+    const MACHINE_ID: &str = "d2c8e7e9a4b34d62b8f8a0c5e9d7f3b1";
+    evaluate("schema-example.yaml", &[("/machine-id", MACHINE_ID)]).success();
+}
+
+#[test]
+fn a_missing_value_fails_the_volume() {
+    evaluate("schema-example.yaml", &[])
+        .code(2)
+        .stderr(predicate::str::contains(
+            "/machine-id: required but missing",
+        ));
+}
+
+#[test]
+fn a_value_of_the_wrong_shape_fails_the_volume() {
+    evaluate(
+        "schema-example.yaml",
+        &[("/machine-id", "not-a-machine-id")],
+    )
+    .code(2)
+    .stderr(predicate::str::contains("/machine-id: expected 32"));
 }
