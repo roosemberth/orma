@@ -1,3 +1,5 @@
+use std::fs::Permissions;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use crate::core::schema::FieldPath;
@@ -10,11 +12,35 @@ pub enum ReadError {
     Unreadable(std::io::Error),
 }
 
+#[derive(Debug, thiserror::Error)]
+#[error("{0}")]
+pub struct WriteError(std::io::Error);
+
 pub fn read(volume: &Path, field: &FieldPath) -> Result<Vec<u8>, ReadError> {
     std::fs::read(locate(volume, field)).map_err(|err| match err.kind() {
         std::io::ErrorKind::NotFound => ReadError::Absent,
         _ => ReadError::Unreadable(err),
     })
+}
+
+/// Write the value for the specified field at the output path.
+/// The value is only accessible by the owner.
+pub fn write(root: &Path, field: &FieldPath, value: &[u8]) -> Result<(), WriteError> {
+    provision_file(root, field, value).map_err(WriteError)
+}
+
+fn provision_file(root: &Path, field: &FieldPath, value: &[u8]) -> std::io::Result<()> {
+    let dest = locate(root, field);
+    let mut at = root.to_path_buf();
+    for component in field.components() {
+        at.push(component);
+        if at != dest && !at.exists() {
+            std::fs::create_dir(&at)?;
+            std::fs::set_permissions(&at, Permissions::from_mode(0o700))?;
+        }
+    }
+    std::fs::write(&dest, value)?;
+    std::fs::set_permissions(&dest, Permissions::from_mode(0o600))
 }
 
 fn locate(volume: &Path, field: &FieldPath) -> PathBuf {
