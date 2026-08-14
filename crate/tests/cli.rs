@@ -197,3 +197,56 @@ fn a_volume_that_fails_its_schema_provisions_nothing() {
         .child("machine-id")
         .assert(predicate::path::missing());
 }
+
+#[test]
+fn help_names_the_generate_subcommand() {
+    orma()
+        .arg("--help")
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("generate"));
+}
+
+fn generate(volume: &TempDir) -> assert_cmd::assert::Assert {
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-example.yaml"))
+        .arg(volume.path())
+        .assert()
+}
+
+#[test]
+fn generate_populates_an_empty_volume() {
+    let volume = volume(&[]);
+    generate(&volume).success();
+
+    volume
+        .child("machine-id")
+        .assert(predicate::str::is_match(r"^[0-9a-f]{32}\n?$").unwrap());
+    let produced = std::fs::metadata(volume.child("machine-id").path()).unwrap();
+    assert_eq!(produced.permissions().mode() & 0o777, 0o600);
+}
+
+#[test]
+fn a_generated_volume_satisfies_its_schema() {
+    let volume = volume(&[]);
+    generate(&volume).success();
+
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-example.yaml"))
+        .arg(volume.path())
+        .arg("--evaluate-only")
+        .assert()
+        .success();
+}
+
+#[test]
+fn generate_refuses_to_overwrite() {
+    let volume = volume(&[("/machine-id", MACHINE_ID)]);
+    generate(&volume)
+        .code(2)
+        .stderr(predicate::str::contains("would overwrite:\n/machine-id"));
+
+    volume.child("machine-id").assert(MACHINE_ID);
+}
