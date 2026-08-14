@@ -377,3 +377,49 @@ fn an_optional_value_the_volume_holds_is_provisioned() {
         .success();
     output.child("sudo.passwd").assert(CRYPT_RECORD);
 }
+
+#[test]
+fn a_system_without_mkpasswd_is_refused_before_prompting() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-hashed-password.yaml"))
+        .arg(volume.path())
+        // Ensure mkpasswd is not in PATH.
+        .env("PATH", "")
+        .write_stdin(PASSPHRASE)
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("mkpasswd: could not be started"))
+        .stderr(predicate::str::contains("Passphrase for").not());
+    volume
+        .child("user.passwd")
+        .assert(predicate::path::missing());
+}
+
+#[test]
+fn a_dry_run_generate_does_not_generate() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg("--dry-run")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Passphrase for").not());
+    assert_eq!(std::fs::read_dir(volume.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_dry_run_reports_a_volume_it_could_not_populate() {
+    let volume = volume(&[("/machine-id", MACHINE_ID)]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg("--dry-run")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("the volume already holds"));
+}
