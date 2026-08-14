@@ -14,6 +14,8 @@ pub mod file {
         pub path: String,
         #[serde(rename = "type")]
         pub type_name: String,
+        #[serde(default)]
+        pub optional: bool,
     }
 
     #[cfg(test)]
@@ -24,6 +26,14 @@ pub mod file {
             Field {
                 path: path.to_owned(),
                 type_name: type_name.to_owned(),
+                optional: false,
+            }
+        }
+
+        pub fn optional_field(path: &str, type_name: &str) -> Field {
+            Field {
+                optional: true,
+                ..field(path, type_name)
             }
         }
 
@@ -60,7 +70,11 @@ impl Schema {
                 path: path.as_str().to_owned(),
                 type_name: field.type_name,
             })?;
-            fields.push(Field { path, kind });
+            fields.push(Field {
+                path,
+                kind,
+                optional: field.optional,
+            });
         }
 
         Ok(Schema { fields })
@@ -75,6 +89,7 @@ impl Schema {
 pub struct Field {
     path: FieldPath,
     kind: FieldKind,
+    optional: bool,
 }
 
 impl Field {
@@ -84,6 +99,10 @@ impl Field {
 
     pub fn kind(&self) -> FieldKind {
         self.kind
+    }
+
+    pub fn is_optional(&self) -> bool {
+        self.optional
     }
 }
 

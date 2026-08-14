@@ -14,7 +14,7 @@ pub enum Step<'r, 's> {
     Done(Result<(), GenerateError>),
 }
 
-/// Report whether the volume already holds a value for this field.
+/// Report what the volume already holds for this field, if anything.
 #[must_use = "the check has to be answered for generate to go on"]
 pub struct CheckValue<'r, 's> {
     generate: &'r mut Generate<'s>,
@@ -29,8 +29,11 @@ impl<'s> CheckValue<'_, 's> {
     }
 
     /// A value is already stored there.
-    pub fn present(self) {
-        self.generate.present.push(self.field.path().clone());
+    pub fn present(self, value: &[u8]) {
+        self.generate.present.push(Held {
+            path: self.field.path().clone(),
+            invalid: self.field.kind().validate(value).err(),
+        });
         self.advance();
     }
 
@@ -121,7 +124,8 @@ impl<'s> WriteValue<'_, 's> {
         self.generate
             .values
             .get(self.current_field_idx)
-            .map_or(&[], Vec::as_slice)
+            .and_then(Option::as_deref)
+            .unwrap_or_default()
     }
 
     pub fn written(self) {
@@ -135,8 +139,8 @@ impl<'s> WriteValue<'_, 's> {
 
 #[derive(Debug, thiserror::Error)]
 pub enum GenerateError {
-    #[error("would overwrite:\n{}", .0.iter().map(FieldPath::to_string).collect::<Vec<_>>().join("\n"))]
-    WouldOverwrite(Vec<FieldPath>),
+    #[error("the volume already holds:\n{}", .0.iter().map(Held::to_string).collect::<Vec<_>>().join("\n"))]
+    AlreadyHeld(Vec<Held>),
     #[error("{path}: {why}")]
     Failed { path: FieldPath, why: String },
     #[error("{path}: produced a value its own type refuses: {reason}")]
@@ -146,6 +150,22 @@ pub enum GenerateError {
         path: FieldPath,
         type_name: &'static str,
     },
+}
+
+/// A value the volume was already holding, and what its field type made of it.
+#[derive(Debug)]
+pub struct Held {
+    pub path: FieldPath,
+    pub invalid: Option<Invalid>,
+}
+
+impl std::fmt::Display for Held {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.invalid {
+            Some(invalid) => write!(f, "{}: {invalid}", self.path),
+            None => write!(f, "{}", self.path),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -164,8 +184,8 @@ enum GeneratePhase {
 pub struct Generate<'s> {
     schema: &'s Schema,
     phase: GeneratePhase,
-    present: Vec<FieldPath>,
-    values: Vec<Vec<u8>>,
+    present: Vec<Held>,
+    values: Vec<Option<Vec<u8>>>,
     failure: Option<GenerateError>,
 }
 
@@ -194,6 +214,12 @@ impl<'s> Generate<'s> {
                 None => self.survey(),
             },
             GeneratePhase::MakeField(at) => match self.schema.fields().get(at) {
+                // An optional field is not generated.
+                Some(field) if field.is_optional() => {
+                    self.values.push(None);
+                    self.phase = GeneratePhase::MakeField(at + 1);
+                    self.step()
+                }
                 Some(field) => match field.kind().recipe() {
                     Some(Recipe::FromEntropy { bytes, build }) => Step::DrawEntropy(DrawEntropy {
                         generate: self,
@@ -224,6 +250,11 @@ impl<'s> Generate<'s> {
                 }
             },
             GeneratePhase::WriteField(at) => match self.schema.fields().get(at) {
+                // An optional field is not generated.
+                Some(_) if self.values.get(at).is_none_or(Option::is_none) => {
+                    self.phase = GeneratePhase::WriteField(at + 1);
+                    self.step()
+                }
                 Some(field) => Step::WriteValue(WriteValue {
                     generate: self,
                     field,
@@ -243,7 +274,7 @@ impl<'s> Generate<'s> {
         let present = std::mem::take(&mut self.present);
         if !present.is_empty() {
             self.phase = GeneratePhase::Done;
-            return Step::Done(Err(GenerateError::WouldOverwrite(present)));
+            return Step::Done(Err(GenerateError::AlreadyHeld(present)));
         }
         self.phase = GeneratePhase::MakeField(0);
         self.step()
@@ -253,7 +284,7 @@ impl<'s> Generate<'s> {
     fn accept(&mut self, field: &Field, field_idx: usize, value: Vec<u8>) {
         match field.kind().validate(&value) {
             Ok(()) => {
-                self.values.push(value);
+                self.values.push(Some(value));
                 self.phase = GeneratePhase::MakeField(field_idx + 1);
             }
             Err(reason) => {
@@ -282,7 +313,7 @@ mod tests {
     use crate::core::schema::file::fixtures;
 
     enum FieldValueHeld {
-        Value,
+        Value(&'static [u8]),
         Nothing,
     }
 
@@ -306,7 +337,7 @@ mod tests {
         loop {
             match generate.step() {
                 Step::CheckValue(check) => match held.next().unwrap() {
-                    FieldValueHeld::Value => check.present(),
+                    FieldValueHeld::Value(value) => check.present(value),
                     FieldValueHeld::Nothing => check.absent(),
                 },
                 Step::DrawEntropy(draw) => {
@@ -324,6 +355,8 @@ mod tests {
     }
 
     const CRYPT_RECORD: &[u8] = b"$y$j9T$saltSaltSalt$hashHashHash";
+
+    const MACHINE_ID: &[u8] = b"d2c8e7e9a4b34d62b8f8a0c5e9d7f3b1";
 
     const ENTROPY: &[u8] = &[
         0xd2, 0xc8, 0xe7, 0xe9, 0xa4, 0xb3, 0x4d, 0x62, //
@@ -354,20 +387,20 @@ mod tests {
     }
 
     #[test]
-    fn an_existing_value_is_not_overwritten() {
+    fn a_volume_already_holding_a_value_is_refused() {
         let schema = schema(vec![
             fixtures::field("/machine-id", "machine-id"),
             fixtures::field("/other-id", "machine-id"),
         ]);
         let (outcome, written) = drive(
             &schema,
-            vec![FieldValueHeld::Nothing, FieldValueHeld::Value],
+            vec![FieldValueHeld::Nothing, FieldValueHeld::Value(MACHINE_ID)],
             ENTROPY,
         );
 
         assert_eq!(
             outcome.unwrap_err().to_string(),
-            "would overwrite:\n/other-id"
+            "the volume already holds:\n/other-id"
         );
         assert!(written.is_empty());
     }
@@ -403,6 +436,54 @@ mod tests {
                 .to_string()
                 .contains("produced a value its own type refuses")
         );
+    }
+
+    #[test]
+    fn an_optional_field_is_not_produced() {
+        let schema = schema(vec![
+            fixtures::field("/machine-id", "machine-id"),
+            fixtures::optional_field("/sudo.passwd", "hashed-password"),
+        ]);
+        let (outcome, written) = drive(
+            &schema,
+            vec![FieldValueHeld::Nothing, FieldValueHeld::Nothing],
+            ENTROPY,
+        );
+
+        assert!(outcome.is_ok());
+        assert_eq!(written.len(), 1);
+        assert_eq!(written[0].0, "/machine-id");
+    }
+
+    #[test]
+    fn an_optional_value_already_held_stops_the_run() {
+        let schema = schema(vec![
+            fixtures::field("/machine-id", "machine-id"),
+            fixtures::optional_field("/sudo.passwd", "hashed-password"),
+        ]);
+        let (outcome, written) = drive(
+            &schema,
+            vec![FieldValueHeld::Nothing, FieldValueHeld::Value(CRYPT_RECORD)],
+            ENTROPY,
+        );
+        assert_eq!(
+            outcome.unwrap_err().to_string(),
+            "the volume already holds:\n/sudo.passwd"
+        );
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn a_held_value_its_type_refuses_is_named_with_its_fault() {
+        let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
+        let (outcome, written) = drive(&schema, vec![FieldValueHeld::Value(b"nonsense")], ENTROPY);
+
+        assert_eq!(
+            outcome.unwrap_err().to_string(),
+            "the volume already holds:\n\
+             /machine-id: expected 32 characters, found 8"
+        );
+        assert!(written.is_empty());
     }
 
     #[test]

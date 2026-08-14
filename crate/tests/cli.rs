@@ -242,11 +242,11 @@ fn a_generated_volume_satisfies_its_schema() {
 }
 
 #[test]
-fn generate_refuses_to_overwrite() {
+fn generate_refuses_a_volume_that_is_not_empty() {
     let volume = volume(&[("/machine-id", MACHINE_ID)]);
-    generate(&volume)
-        .code(2)
-        .stderr(predicate::str::contains("would overwrite:\n/machine-id"));
+    generate(&volume).code(2).stderr(predicate::str::contains(
+        "the volume already holds:\n/machine-id",
+    ));
 
     volume.child("machine-id").assert(MACHINE_ID);
 }
@@ -349,4 +349,29 @@ fn generate_schema_with_every_field_type() {
     output
         .child("user.passwd")
         .assert(predicate::str::starts_with("$y$"));
+    output
+        .child("sudo.passwd")
+        .assert(predicate::path::missing());
+}
+
+#[test]
+fn an_optional_value_the_volume_holds_is_provisioned() {
+    let volume = volume(&[]);
+    let output = TempDir::new().unwrap();
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .write_stdin(PASSPHRASE)
+        .assert()
+        .success();
+    volume.child("sudo.passwd").write_str(CRYPT_RECORD).unwrap();
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg(output.path())
+        .assert()
+        .success();
+    output.child("sudo.passwd").assert(CRYPT_RECORD);
 }

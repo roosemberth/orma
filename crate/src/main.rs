@@ -92,7 +92,7 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
         Err(err) => {
             eprintln!("{err}");
             match err {
-                GenerateError::WouldOverwrite(_) => ExitCode::from(2),
+                GenerateError::AlreadyHeld(_) => ExitCode::from(2),
                 GenerateError::Unable { .. } => ExitCode::from(3),
                 _ => ExitCode::from(1),
             }
@@ -104,10 +104,10 @@ fn drive_generate(mut generate: Generate, volume: &Path) -> Result<(), GenerateE
     use core::generate::Step;
     loop {
         match generate.step() {
-            Step::CheckValue(request) => match volume::has_field_value(volume, request.path()) {
-                Ok(true) => request.present(),
-                Ok(false) => request.absent(),
-                Err(err) => request.failed(err.to_string()),
+            Step::CheckValue(request) => match volume::read(volume, request.path()) {
+                Ok(value) => request.present(&value),
+                Err(volume::ReadError::Absent) => request.absent(),
+                Err(volume::ReadError::Unreadable(err)) => request.failed(err.to_string()),
             },
             Step::DrawEntropy(request) => match random::draw(request.wanted()) {
                 Ok(entropy) => request.filled(&entropy),
