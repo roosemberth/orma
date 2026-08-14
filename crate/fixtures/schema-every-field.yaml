@@ -4,3 +4,6 @@ fields:
     type: machine-id
   - path: /user.passwd
     type: hashed-password
+  - path: /sudo.passwd
+    type: hashed-password
+    optional: true

@@ -37,31 +37,32 @@ impl<'s> ReadValue<'_, 's> {
     /// The file contents were available.
     pub fn found(self, value: &[u8]) {
         match self.field.kind().validate(value) {
-            Ok(()) => {
-                self.resolve.values.push(value.to_vec());
-                self.settle(None)
-            }
-            Err(invalid) => self.settle(Some(Reason::Invalid(invalid))),
+            Ok(()) => self.conclude(Some(value.to_vec()), None),
+            Err(invalid) => self.conclude(None, Some(Reason::Invalid(invalid))),
         }
     }
 
     /// Nothing is stored there.
     pub fn absent(self) {
-        self.settle(Some(Reason::Missing));
+        match self.field.is_optional() {
+            true => self.conclude(None, None),
+            false => self.conclude(None, Some(Reason::Missing)),
+        }
     }
 
     /// Something is stored there but it could not be read.
     pub fn unreadable(self, why: String) {
-        self.settle(Some(Reason::Unreadable(why)));
+        self.conclude(None, Some(Reason::Unreadable(why)));
     }
 
-    fn settle(self, refused: Option<Reason>) {
+    fn conclude(self, value: Option<Vec<u8>>, refused: Option<Reason>) {
         if let Some(reason) = refused {
             self.resolve.rejections.push(Rejection {
                 path: self.field.path().clone(),
                 reason,
             });
         }
+        self.resolve.values.push(value);
         self.resolve.phase = ResolvePhase::ReadField(self.current_field_idx + 1);
     }
 }
@@ -84,7 +85,8 @@ impl<'s> WriteValue<'_, 's> {
         self.resolve
             .values
             .get(self.current_field_idx)
-            .map_or(&[], Vec::as_slice)
+            .and_then(Option::as_deref)
+            .unwrap_or_default()
     }
 
     pub fn written(self) {
@@ -147,7 +149,7 @@ pub struct Resolve<'s> {
     schema: &'s Schema,
     mode: Mode,
     phase: ResolvePhase,
-    values: Vec<Vec<u8>>,
+    values: Vec<Option<Vec<u8>>>,
     rejections: Vec<Rejection>,
     failure: Option<ResolveError>,
 }
@@ -178,6 +180,11 @@ impl<'s> Resolve<'s> {
                 None => self.verdict(),
             },
             ResolvePhase::WriteField(at) => match self.schema.fields().get(at) {
+                // A missing but not required field has nothing to provision.
+                Some(_) if self.values.get(at).is_none_or(Option::is_none) => {
+                    self.phase = ResolvePhase::WriteField(at + 1);
+                    self.step()
+                }
                 Some(field) => Step::WriteValue(WriteValue {
                     resolve: self,
                     field,
@@ -291,6 +298,32 @@ mod tests {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
         let err = evaluate(&schema, vec![Answer::Absent]).unwrap_err();
         assert_eq!(err.to_string(), "/machine-id: required but missing");
+    }
+
+    #[test]
+    fn an_optional_value_may_be_absent() {
+        let schema = schema(vec![fixtures::optional_field(
+            "/sudo.passwd",
+            "hashed-password",
+        )]);
+        let (verdict, provisioned) = drive(&schema, Mode::Write, vec![Answer::Absent]);
+
+        assert!(verdict.is_ok());
+        assert!(provisioned.is_empty());
+    }
+
+    #[test]
+    fn an_optional_value_that_is_present_is_still_judged() {
+        let schema = schema(vec![fixtures::optional_field(
+            "/sudo.passwd",
+            "hashed-password",
+        )]);
+        let err = evaluate(&schema, vec![Answer::Value(b"hunter2")]).unwrap_err();
+
+        assert_eq!(
+            err.to_string(),
+            "/sudo.passwd: not a crypt record: missing leading '$'"
+        );
     }
 
     #[test]
