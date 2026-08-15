@@ -3,6 +3,15 @@
 use crate::core::field_type::{Invalid, Recipe};
 use crate::core::schema::{Field, FieldPath, Schema};
 
+/// What generate does about the values a volume already holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Populate a volume that holds nothing.
+    Populate,
+    /// Only populate missing fields.
+    Upgrade,
+}
+
 /// Each step carries a request to perform an action in the world.
 /// Upon completing it, the driver should answer the request.
 #[must_use = "generate makes no progress until the step is carried out"]
@@ -30,6 +39,9 @@ impl<'s> CheckValue<'_, 's> {
 
     /// A value is already stored there.
     pub fn present(self, value: &[u8]) {
+        if let Some(held) = self.generate.held.get_mut(self.current_field_idx) {
+            *held = true;
+        }
         self.generate.present.push(Held {
             path: self.field.path().clone(),
             invalid: self.field.kind().validate(value).err(),
@@ -145,6 +157,8 @@ impl<'s> WriteValue<'_, 's> {
 pub enum GenerateError {
     #[error("the volume already holds:\n{}", .0.iter().map(Held::to_string).collect::<Vec<_>>().join("\n"))]
     AlreadyHeld(Vec<Held>),
+    #[error("the volume holds invalid values:\n{}", .0.iter().map(Held::to_string).collect::<Vec<_>>().join("\n"))]
+    InvalidValues(Vec<Held>),
     #[error("{path}: {why}")]
     Failed { path: FieldPath, why: String },
     #[error("{path}: produced a value its own type refuses: {reason}")]
@@ -187,18 +201,23 @@ enum GeneratePhase {
 #[derive(Debug)]
 pub struct Generate<'s> {
     schema: &'s Schema,
+    mode: Mode,
     phase: GeneratePhase,
     present: Vec<Held>,
+    /// Which fields the volume was already holding, by declaration order.
+    held: Vec<bool>,
     values: Vec<Option<Vec<u8>>>,
     failure: Option<GenerateError>,
 }
 
 impl<'s> Generate<'s> {
-    pub fn new(schema: &'s Schema) -> Generate<'s> {
+    pub fn new(schema: &'s Schema, mode: Mode) -> Generate<'s> {
         Generate {
             schema,
+            mode,
             phase: GeneratePhase::CheckField(0),
             present: Vec::new(),
+            held: vec![false; schema.fields().len()],
             values: Vec::new(),
             failure: None,
         }
@@ -218,8 +237,10 @@ impl<'s> Generate<'s> {
                 None => self.survey(),
             },
             GeneratePhase::MakeField(at) => match self.schema.fields().get(at) {
-                // An optional field is not generated.
-                Some(field) if field.is_optional() => {
+                // Don't generate existing or optional values
+                Some(field)
+                    if field.is_optional() || self.held.get(at).copied().unwrap_or(false) =>
+                {
                     self.values.push(None);
                     self.phase = GeneratePhase::MakeField(at + 1);
                     self.step()
@@ -276,9 +297,23 @@ impl<'s> Generate<'s> {
     /// Survey the existing fields in the volume.
     fn survey(&mut self) -> Step<'_, 's> {
         let present = std::mem::take(&mut self.present);
-        if !present.is_empty() {
+        let refusal = match self.mode {
+            Mode::Populate if !present.is_empty() => Some(GenerateError::AlreadyHeld(present)),
+            Mode::Upgrade => {
+                let invalid: Vec<Held> = present
+                    .into_iter()
+                    .filter(|held| held.invalid.is_some())
+                    .collect();
+                match invalid.is_empty() {
+                    true => None,
+                    false => Some(GenerateError::InvalidValues(invalid)),
+                }
+            }
+            Mode::Populate => None,
+        };
+        if let Some(refusal) = refusal {
             self.phase = GeneratePhase::Done;
-            return Step::Done(Err(GenerateError::AlreadyHeld(present)));
+            return Step::Done(Err(refusal));
         }
         self.phase = GeneratePhase::MakeField(0);
         self.step()
@@ -332,12 +367,13 @@ mod tests {
     /// draw with `entropy`. Returns the outcome alongside what was written.
     fn drive(
         schema: &Schema,
+        mode: Mode,
         held: Vec<FieldValueHeld>,
         entropy: &[u8],
     ) -> (Result<(), GenerateError>, Produced) {
         let mut held = held.into_iter();
         let mut written = Vec::new();
-        let mut generate = Generate::new(schema);
+        let mut generate = Generate::new(schema, mode);
         loop {
             match generate.step() {
                 Step::CheckValue(check) => match held.next().unwrap() {
@@ -370,7 +406,7 @@ mod tests {
     #[test]
     fn a_schema_declaring_nothing_produces_nothing() {
         let schema = schema(vec![]);
-        let (outcome, written) = drive(&schema, vec![], ENTROPY);
+        let (outcome, written) = drive(&schema, Mode::Populate, vec![], ENTROPY);
         assert!(outcome.is_ok());
         assert!(written.is_empty());
     }
@@ -378,7 +414,12 @@ mod tests {
     #[test]
     fn a_machine_id_is_made_out_of_the_randomness_drawn() {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
-        let (outcome, written) = drive(&schema, vec![FieldValueHeld::Nothing], ENTROPY);
+        let (outcome, written) = drive(
+            &schema,
+            Mode::Populate,
+            vec![FieldValueHeld::Nothing],
+            ENTROPY,
+        );
 
         assert!(outcome.is_ok());
         assert_eq!(
@@ -398,6 +439,7 @@ mod tests {
         ]);
         let (outcome, written) = drive(
             &schema,
+            Mode::Populate,
             vec![FieldValueHeld::Nothing, FieldValueHeld::Value(MACHINE_ID)],
             ENTROPY,
         );
@@ -412,7 +454,12 @@ mod tests {
     #[test]
     fn a_hashed_password_is_asked_for_and_accepted_as_produced() {
         let schema = schema(vec![fixtures::field("/user.passwd", "hashed-password")]);
-        let (outcome, written) = drive(&schema, vec![FieldValueHeld::Nothing], ENTROPY);
+        let (outcome, written) = drive(
+            &schema,
+            Mode::Populate,
+            vec![FieldValueHeld::Nothing],
+            ENTROPY,
+        );
 
         assert!(outcome.is_ok());
         assert_eq!(
@@ -424,7 +471,7 @@ mod tests {
     #[test]
     fn a_hashing_that_produces_nonsense_is_refused() {
         let schema = schema(vec![fixtures::field("/user.passwd", "hashed-password")]);
-        let mut generate = Generate::new(&schema);
+        let mut generate = Generate::new(&schema, Mode::Populate);
         let outcome = loop {
             match generate.step() {
                 Step::CheckValue(check) => check.absent(),
@@ -450,6 +497,7 @@ mod tests {
         ]);
         let (outcome, written) = drive(
             &schema,
+            Mode::Populate,
             vec![FieldValueHeld::Nothing, FieldValueHeld::Nothing],
             ENTROPY,
         );
@@ -467,6 +515,7 @@ mod tests {
         ]);
         let (outcome, written) = drive(
             &schema,
+            Mode::Populate,
             vec![FieldValueHeld::Nothing, FieldValueHeld::Value(CRYPT_RECORD)],
             ENTROPY,
         );
@@ -480,11 +529,71 @@ mod tests {
     #[test]
     fn a_held_value_its_type_refuses_is_named_with_its_fault() {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
-        let (outcome, written) = drive(&schema, vec![FieldValueHeld::Value(b"nonsense")], ENTROPY);
+        let (outcome, written) = drive(
+            &schema,
+            Mode::Populate,
+            vec![FieldValueHeld::Value(b"nonsense")],
+            ENTROPY,
+        );
 
         assert_eq!(
             outcome.unwrap_err().to_string(),
             "the volume already holds:\n\
+             /machine-id: expected 32 characters, found 8"
+        );
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn upgrading_produces_only_what_the_volume_lacks() {
+        let schema = schema(vec![
+            fixtures::field("/machine-id", "machine-id"),
+            fixtures::field("/user.passwd", "hashed-password"),
+        ]);
+        let (outcome, written) = drive(
+            &schema,
+            Mode::Upgrade,
+            vec![FieldValueHeld::Value(MACHINE_ID), FieldValueHeld::Nothing],
+            ENTROPY,
+        );
+
+        assert!(outcome.is_ok());
+        assert_eq!(
+            written,
+            vec![("/user.passwd".to_owned(), CRYPT_RECORD.to_vec())]
+        );
+    }
+
+    #[test]
+    fn upgrading_a_volume_that_lacks_nothing_produces_nothing() {
+        let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
+        let (outcome, written) = drive(
+            &schema,
+            Mode::Upgrade,
+            vec![FieldValueHeld::Value(MACHINE_ID)],
+            ENTROPY,
+        );
+
+        assert!(outcome.is_ok());
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn upgrading_refuses_a_volume_holding_an_invalid_value() {
+        let schema = schema(vec![
+            fixtures::field("/machine-id", "machine-id"),
+            fixtures::field("/user.passwd", "hashed-password"),
+        ]);
+        let (outcome, written) = drive(
+            &schema,
+            Mode::Upgrade,
+            vec![FieldValueHeld::Value(b"nonsense"), FieldValueHeld::Nothing],
+            ENTROPY,
+        );
+
+        assert_eq!(
+            outcome.unwrap_err().to_string(),
+            "the volume holds invalid values:\n\
              /machine-id: expected 32 characters, found 8"
         );
         assert!(written.is_empty());
@@ -496,7 +605,7 @@ mod tests {
             fixtures::field("/machine-id", "machine-id"),
             fixtures::field("/other-id", "machine-id"),
         ]);
-        let mut generate = Generate::new(&schema);
+        let mut generate = Generate::new(&schema, Mode::Populate);
         let mut checked = Vec::new();
 
         while let Step::CheckValue(check) = generate.step() {
@@ -509,7 +618,7 @@ mod tests {
     #[test]
     fn a_write_that_fails_ends_the_run() {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
-        let mut generate = Generate::new(&schema);
+        let mut generate = Generate::new(&schema, Mode::Populate);
 
         let outcome = loop {
             match generate.step() {
@@ -527,7 +636,7 @@ mod tests {
     #[test]
     fn randomness_that_falls_short_is_refused() {
         let schema = schema(vec![fixtures::field("/machine-id", "machine-id")]);
-        let mut generate = Generate::new(&schema);
+        let mut generate = Generate::new(&schema, Mode::Populate);
 
         let outcome = loop {
             match generate.step() {

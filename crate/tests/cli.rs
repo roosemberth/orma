@@ -455,3 +455,48 @@ fn asking_through_a_missing_agent_is_reported() {
         .child("user.passwd")
         .assert(predicate::path::missing());
 }
+
+#[test]
+fn upgrading_fills_the_field_the_volume_lacks() {
+    let volume = volume(&[("/machine-id", MACHINE_ID)]);
+    let output = TempDir::new().unwrap();
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg("--upgrade")
+        .write_stdin(PASSPHRASE)
+        .assert()
+        .success();
+    volume.child("machine-id").assert(MACHINE_ID);
+    volume
+        .child("user.passwd")
+        .assert(predicate::str::starts_with("$y$"));
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg(output.path())
+        .assert()
+        .success();
+}
+
+#[test]
+fn upgrading_refuses_a_volume_holding_an_invalid_value() {
+    let volume = volume(&[("/machine-id", "not-a-machine-id")]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg("--upgrade")
+        .write_stdin(PASSPHRASE)
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains(
+            "/machine-id: expected 32 characters",
+        ));
+
+    volume
+        .child("user.passwd")
+        .assert(predicate::path::missing());
+}

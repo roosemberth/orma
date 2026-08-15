@@ -61,10 +61,15 @@ Both operations use a *schema* and an *identity volume*.
 
 - **resolve** writes the resolved values into the specified directory. Every
   field is validated, and nothing is written unless all of them are accepted.
+  With `--evaluate-only` it reports any invalid or missing values; this can be
+  used to test whether an existing identity volume satisfies the schema of an
+  updated system image.
 
-- **generate** writes new values into the identity volume. This is typically
-  used to populate a new identity volume. Some field types require prompting
-  the operator (e.g. `hashed-password` asks the operator for one).
+- **generate** writes new values into the identity volume.
+  This is typically used to populate a new identity volume and to generate any
+  missing values on an existing identity volume using `--upgrade` (e.g. when
+  the schema has grown a field).
+  Some field types prompt the operator (e.g. `hashed-password` asks for one).
   Prompts may be answered via the TTY (default) or using `systemd-ask-password`.
 
 Run `orma --help` for more details.
@@ -140,17 +145,7 @@ and populates a volume that satisfies it in the first place.
 
 ## Limitations
 
-A volume that already holds some of its values cannot be filled in from the
-emergency shell: generate refuses one holding anything at all. So an image
-whose schema gains a field will not boot from the volumes that already exist,
-resolve failing closed as it should, with no way to add the one field that is
-new.
-
-Run the new schema against the volume with `--evaluate-only` from the system
-that is still up, before rebooting into the new image, and orma names what is
-missing while it can still be dealt with. Adding those values is manual today.
-An `--upgrade` mode, producing only what a volume lacks, is the intended
-answer.
+Upgrading refuses an identity volume with an invalid value.
 
 Provisioning takes an operator and one machine at a time. A `hashed-password`
 is always asked for, and `--ask-via` changes who does the asking rather than

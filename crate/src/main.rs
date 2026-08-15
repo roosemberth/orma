@@ -10,6 +10,7 @@ mod schema_file;
 mod tool;
 mod volume;
 
+use core::generate::Mode as GenerateMode;
 use core::generate::{CheckValue, DrawEntropy, Generate, GenerateError};
 use core::resolve::{Mode, Resolve, ResolveError, Step};
 use passphrase::AskVia;
@@ -50,8 +51,8 @@ struct ResolveCmd {
     evaluate_only: bool,
 }
 
-/// Provision the identity volume at <volume> with the fields <schema>
-/// declares.
+/// Provision the identity volume at <volume> with the fields <schema> declares.
+/// With --upgrade, generate any missing values in the identity volume.
 #[derive(FromArgs)]
 #[argh(subcommand, name = "generate")]
 struct GenerateCmd {
@@ -70,6 +71,10 @@ struct GenerateCmd {
     /// how to prompt the operator
     #[argh(option, default = "AskVia::Tty")]
     ask_via: AskVia,
+
+    /// produce only the values the volume lacks
+    #[argh(switch)]
+    upgrade: bool,
 }
 
 fn main() -> ExitCode {
@@ -97,8 +102,13 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
         return ExitCode::from(1);
     }
 
+    let mode = match cmd.upgrade {
+        true => GenerateMode::Upgrade,
+        false => GenerateMode::Populate,
+    };
+
     // Always dry-run before performing.
-    if let Err(err) = rehearse_generate(Generate::new(&schema), &cmd.volume, cmd.ask_via) {
+    if let Err(err) = rehearse_generate(Generate::new(&schema, mode), &cmd.volume, cmd.ask_via) {
         eprintln!("{err}");
         return generate_exit(&err);
     }
@@ -106,7 +116,7 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    match drive_generate(Generate::new(&schema), &cmd.volume, cmd.ask_via) {
+    match drive_generate(Generate::new(&schema, mode), &cmd.volume, cmd.ask_via) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
@@ -117,7 +127,7 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
 
 fn generate_exit(err: &GenerateError) -> ExitCode {
     match err {
-        GenerateError::AlreadyHeld(_) => ExitCode::from(2),
+        GenerateError::AlreadyHeld(_) | GenerateError::InvalidValues(_) => ExitCode::from(2),
         GenerateError::Unable { .. } => ExitCode::from(3),
         _ => ExitCode::from(1),
     }
