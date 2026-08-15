@@ -15,8 +15,28 @@ use core::generate::{CheckValue, DrawEntropy, Generate, GenerateError};
 use core::resolve::{Mode, Resolve, ResolveError, Step};
 use passphrase::AskVia;
 
-/// Loads a system's passwords and keys at boot from a separate volume.
+/// Loads a machine's identity at boot from a volume kept apart from the system
+/// image: its machine-id, host keys, and whatever else distinguishes a machine
+/// from another built the same way. Run `orma <command> --help` for details.
 #[derive(FromArgs)]
+#[argh(
+    error_code(
+        1,
+        "Invalid argument or system error: a malformed command line,\n    \
+         an unreadable schema, a path that is not a directory, a tool\n    \
+         that is missing, a write that failed"
+    ),
+    error_code(
+        2,
+        "the volume is not as the operation requires: it fails its \
+         schema,\n    or it already holds values generate would have produced"
+    ),
+    error_code(
+        3,
+        "orma cannot act on the schema: a version or a field type this\n    \
+         build does not implement"
+    )
+)]
 struct Cli {
     #[argh(subcommand)]
     cmd: SubCmd,
@@ -29,24 +49,33 @@ enum SubCmd {
     Generate(GenerateCmd),
 }
 
-/// Check the volume at <volume> against <schema>, provisioning the values
-/// it declares at <output>. With --evaluate-only, <output> may be omitted.
+/// Verify the identity volume at <volume> against <schema> and write the
+/// values under <output>.
+/// Values are validated and nothing is written unless they are all valid.
 #[derive(FromArgs)]
-#[argh(subcommand, name = "resolve")]
+#[argh(
+    subcommand,
+    name = "resolve",
+    example = "Provision at boot, from the initrd:\n  {command_name} \
+               /etc/orma/schema.yaml /var/lib/identity /sysroot/var/lib/orma",
+    example = "Ask whether the next image's schema would boot, before \
+               updating:\n  {command_name} /new/schema.yaml /var/lib/identity \
+               --evaluate-only"
+)]
 struct ResolveCmd {
     /// path to the schema YAML
     #[argh(positional)]
     schema: PathBuf,
 
-    /// path where the unlocked volume is mounted
+    /// directory where the unlocked identity volume is mounted
     #[argh(positional)]
     volume: PathBuf,
 
-    /// path to the output directory (required unless --evaluate-only)
+    /// directory to provision into (required unless --evaluate-only)
     #[argh(positional)]
     output: Option<PathBuf>,
 
-    /// validate without writing
+    /// verify and report through the exit status, writing nothing
     #[argh(switch)]
     evaluate_only: bool,
 }
@@ -54,21 +83,32 @@ struct ResolveCmd {
 /// Provision the identity volume at <volume> with the fields <schema> declares.
 /// With --upgrade, generate any missing values in the identity volume.
 #[derive(FromArgs)]
-#[argh(subcommand, name = "generate")]
+#[argh(
+    subcommand,
+    name = "generate",
+    example = "Populate a new volume:\n  {command_name} /etc/orma/schema.yaml \
+               /var/lib/identity",
+    example = "Generate any misssing values, from an emergency shell:\n  \
+               {command_name} /etc/orma/schema.yaml /var/lib/identity \
+               --upgrade",
+    example = "Check this system could provision, without any writing:\n  \
+               {command_name} /etc/orma/schema.yaml /var/lib/identity \
+               --dry-run"
+)]
 struct GenerateCmd {
     /// path to the schema YAML
     #[argh(positional)]
     schema: PathBuf,
 
-    /// path where the unlocked volume is mounted
+    /// directory where the unlocked identity volume is mounted
     #[argh(positional)]
     volume: PathBuf,
 
-    /// check what running could have carried out
+    /// rehearse and stop
     #[argh(switch)]
     dry_run: bool,
 
-    /// how to prompt the operator
+    /// how to reach the operator: tty (default) or systemd-ask-password
     #[argh(option, default = "AskVia::Tty")]
     ask_via: AskVia,
 
