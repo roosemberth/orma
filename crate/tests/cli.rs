@@ -1,4 +1,4 @@
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 
 use assert_cmd::Command;
@@ -211,6 +211,64 @@ fn a_volume_that_fails_its_schema_provisions_nothing() {
     output
         .child("machine-id")
         .assert(predicate::path::missing());
+}
+
+#[test]
+fn a_symlink_present_where_a_value_should_be_written_is_refused() {
+    let elsewhere = TempDir::new().unwrap();
+    elsewhere.child("secret").write_str("KEEP ME").unwrap();
+
+    let holding = volume(&[("/machine-id", MACHINE_ID)]);
+    let volume = volume(&[]);
+    symlink(
+        elsewhere.child("secret").path(),
+        volume.child("machine-id").path(),
+    )
+    .unwrap();
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-example.yaml"))
+        .arg(volume.path())
+        .arg("--evaluate-only")
+        .assert()
+        .code(2)
+        .stderr(predicate::str::contains("expected a file, found a symlink"));
+
+    let output = TempDir::new().unwrap();
+    symlink(
+        elsewhere.child("secret").path(),
+        output.child("machine-id").path(),
+    )
+    .unwrap();
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-example.yaml"))
+        .arg(holding.path())
+        .arg(output.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains("expected a file, found a symlink"));
+
+    elsewhere.child("secret").assert("KEEP ME");
+}
+
+#[test]
+fn a_symlink_directory_on_the_way_to_a_value_is_refused() {
+    let elsewhere = TempDir::new().unwrap();
+    let volume = volume(&[]);
+    symlink(elsewhere.path(), volume.child("sub").path()).unwrap();
+
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-nested.yaml"))
+        .arg(volume.path())
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "expected a directory, found a symlink",
+        ));
+
+    assert_eq!(std::fs::read_dir(elsewhere.path()).unwrap().count(), 0);
 }
 
 #[test]

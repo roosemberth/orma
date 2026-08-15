@@ -276,6 +276,7 @@ dependencies = [
  "argh",
  "assert_cmd",
  "assert_fs",
+ "libc",
  "predicates",
  "rpassword",
  "serde",
