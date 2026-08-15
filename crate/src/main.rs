@@ -238,7 +238,12 @@ fn drive_generate(
                 }
             }
             Step::WriteValue(request) => {
-                let written = volume::write(volume, request.path(), request.value());
+                let written = volume::write(
+                    volume,
+                    request.path(),
+                    request.value(),
+                    request.permissions(),
+                );
                 match written {
                     Ok(()) => request.written(),
                     Err(err) => request.failed(err.to_string()),
@@ -311,7 +316,12 @@ fn drive_resolve(
             },
             Step::WriteValue(request) => match output {
                 Some(output) => {
-                    let provisioned = volume::write(output, request.path(), request.value());
+                    let provisioned = volume::write(
+                        output,
+                        request.path(),
+                        request.value(),
+                        request.permissions(),
+                    );
                     match provisioned {
                         Ok(()) => request.written(),
                         Err(err) => request.failed(err.to_string()),

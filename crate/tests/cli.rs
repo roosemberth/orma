@@ -163,21 +163,36 @@ fn accepted_values_are_provisioned_at_the_output() {
     output.child("machine-id").assert(MACHINE_ID);
 }
 
+fn mode_of(path: &std::path::Path) -> u32 {
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// A machine-id is read by every process on the system, a password hash by
+/// none but the owner, so the type the schema declares decides the mode.
 #[test]
-fn provisioned_values_are_only_readable_by_its_owner() {
-    let volume = volume(&[("/machine-id", MACHINE_ID)]);
+fn a_provisioned_value_is_readable_by_whoever_the_type_says() {
+    let volume = volume(&[]);
     let output = TempDir::new().unwrap();
 
     orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .write_stdin(PASSPHRASE)
+        .assert()
+        .success();
+    orma()
         .arg("resolve")
-        .arg(fixture("schema-example.yaml"))
+        .arg(fixture("schema-every-field.yaml"))
         .arg(volume.path())
         .arg(output.path())
         .assert()
         .success();
 
-    let provisioned = std::fs::metadata(output.child("machine-id").path()).unwrap();
-    assert_eq!(provisioned.permissions().mode() & 0o777, 0o600);
+    for holding in [volume.path(), output.path()] {
+        assert_eq!(mode_of(&holding.join("machine-id")), 0o644);
+        assert_eq!(mode_of(&holding.join("user.passwd")), 0o600);
+    }
 }
 
 #[test]
@@ -223,8 +238,6 @@ fn generate_populates_an_empty_volume() {
     volume
         .child("machine-id")
         .assert(predicate::str::is_match(r"^[0-9a-f]{32}\n?$").unwrap());
-    let produced = std::fs::metadata(volume.child("machine-id").path()).unwrap();
-    assert_eq!(produced.permissions().mode() & 0o777, 0o600);
 }
 
 #[test]

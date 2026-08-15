@@ -34,6 +34,14 @@ impl FieldKind {
         }
     }
 
+    /// The mode a value of this type is stored under.
+    pub fn permissions(&self) -> u32 {
+        match self {
+            FieldKind::MachineId => 0o644,
+            FieldKind::HashedPassword => 0o600,
+        }
+    }
+
     /// How a value of this type is produced, or `None` if unknown/unable.
     pub fn recipe(&self) -> Option<Recipe> {
         match self {

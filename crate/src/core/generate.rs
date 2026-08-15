@@ -136,6 +136,11 @@ impl<'s> WriteValue<'_, 's> {
         self.field.path()
     }
 
+    /// The mode the value is to be stored under.
+    pub fn permissions(&self) -> u32 {
+        self.field.kind().permissions()
+    }
+
     pub fn value(&self) -> &[u8] {
         self.generate
             .values

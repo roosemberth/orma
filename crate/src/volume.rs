@@ -23,13 +23,23 @@ pub fn read(volume: &Path, field: &FieldPath) -> Result<Vec<u8>, ReadError> {
     })
 }
 
-/// Write the value for the specified field at the output path.
-/// The value is only accessible by the owner.
-pub fn write(root: &Path, field: &FieldPath, value: &[u8]) -> Result<(), WriteError> {
-    provision_file(root, field, value).map_err(WriteError)
+/// Write the value for the specified field at the output path, with the
+/// permissions specified by the field.
+pub fn write(
+    root: &Path,
+    field: &FieldPath,
+    value: &[u8],
+    permissions: u32,
+) -> Result<(), WriteError> {
+    provision_file(root, field, value, permissions).map_err(WriteError)
 }
 
-fn provision_file(root: &Path, field: &FieldPath, value: &[u8]) -> std::io::Result<()> {
+fn provision_file(
+    root: &Path,
+    field: &FieldPath,
+    value: &[u8],
+    permissions: u32,
+) -> std::io::Result<()> {
     let dest = locate(root, field);
     let mut at = root.to_path_buf();
     for component in field.components() {
@@ -40,7 +50,7 @@ fn provision_file(root: &Path, field: &FieldPath, value: &[u8]) -> std::io::Resu
         }
     }
     std::fs::write(&dest, value)?;
-    std::fs::set_permissions(&dest, Permissions::from_mode(0o600))
+    std::fs::set_permissions(&dest, Permissions::from_mode(permissions))
 }
 
 fn locate(volume: &Path, field: &FieldPath) -> PathBuf {

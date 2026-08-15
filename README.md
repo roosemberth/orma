@@ -137,7 +137,7 @@ because the account is configured to read its hash from that path, and
 `/var/lib/orma/machine-id` becomes the machine's identity because
 `/etc/machine-id` is populated from it. Orma writes the values where the schema
 says and stops there; the schema ships with the image, and so does whatever
-reads them.
+reads them. The permissions of the written file are decided by the field type.
 
 Those files are not the identity, only a copy of it. Resolve rewrites them from
 the volume on every boot, so losing them costs a reboot, and the volume remains
@@ -171,6 +171,10 @@ hardware work, and it means a volume restored onto a second machine gives both
 the same identity, which orma will resolve without complaint.
 
 Nothing keeps concurrent runs either: orma takes no lock on the volume.
+
+Directories orma creates may only be entered by their owner, whatever the fields
+underneath them are. A `machine-id` declared at `/sub/machine-id` is written
+world readable and stays out of reach of the processes meant to read it.
 
 A volume is the only copy of what it holds. Generating a new one gives the
 machine a new identity rather than restoring its old one, so anything issued
