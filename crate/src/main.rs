@@ -3,6 +3,7 @@ use std::process::ExitCode;
 
 use argh::FromArgs;
 
+mod asker;
 mod core;
 mod passphrase;
 mod random;
@@ -10,10 +11,10 @@ mod schema_file;
 mod tool;
 mod volume;
 
+use asker::{AskVia, Asker};
 use core::generate::Mode as GenerateMode;
 use core::generate::{CheckValue, DrawEntropy, Generate, GenerateError};
 use core::resolve::{Mode, Resolve, ResolveError, Step};
-use passphrase::AskVia;
 
 /// Loads a machine's identity at boot from a volume kept apart from the system
 /// image: its machine-id, host keys, and whatever else distinguishes a machine
@@ -88,12 +89,15 @@ struct ResolveCmd {
     name = "generate",
     example = "Populate a new volume:\n  {command_name} /etc/orma/schema.yaml \
                /var/lib/identity",
-    example = "Generate any misssing values, from an emergency shell:\n  \
+    example = "Generate any missing values, from an emergency shell:\n  \
                {command_name} /etc/orma/schema.yaml /var/lib/identity \
                --upgrade",
     example = "Check this system could provision, without any writing:\n  \
                {command_name} /etc/orma/schema.yaml /var/lib/identity \
-               --dry-run"
+               --dry-run",
+    example = "Provision unattended, from a pipeline:\n  yes hunter2 | \
+               {command_name} /etc/orma/schema.yaml /var/lib/identity \
+               --ask-via stdin"
 )]
 struct GenerateCmd {
     /// path to the schema YAML
@@ -108,7 +112,8 @@ struct GenerateCmd {
     #[argh(switch)]
     dry_run: bool,
 
-    /// how to reach the operator: tty (default) or systemd-ask-password
+    /// how to reach the operator: tty (default), systemd-ask-password, or
+    /// stdin to take one piped line per question
     #[argh(option, default = "AskVia::Tty")]
     ask_via: AskVia,
 
@@ -147,8 +152,9 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
         false => GenerateMode::Populate,
     };
 
+    let mut asker = Asker::new(cmd.ask_via);
     // Always dry-run before performing.
-    if let Err(err) = rehearse_generate(Generate::new(&schema, mode), &cmd.volume, cmd.ask_via) {
+    if let Err(err) = rehearse_generate(Generate::new(&schema, mode), &cmd.volume, &mut asker) {
         eprintln!("{err}");
         return generate_exit(&err);
     }
@@ -156,7 +162,7 @@ fn run_generate(cmd: GenerateCmd) -> ExitCode {
         return ExitCode::SUCCESS;
     }
 
-    match drive_generate(Generate::new(&schema, mode), &cmd.volume, cmd.ask_via) {
+    match drive_generate(Generate::new(&schema, mode), &cmd.volume, &mut asker) {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             eprintln!("{err}");
@@ -178,19 +184,17 @@ fn generate_exit(err: &GenerateError) -> ExitCode {
 fn rehearse_generate(
     mut generate: Generate,
     volume: &Path,
-    ask_via: AskVia,
+    asker: &mut Asker,
 ) -> Result<(), GenerateError> {
     use core::generate::Step;
     loop {
         match generate.step() {
             Step::CheckValue(request) => answer_check(volume, request),
             Step::DrawEntropy(request) => answer_draw(request),
-            Step::HashPassphrase(request) => {
-                match passphrase::rehearse_passphrase_and_hash(ask_via) {
-                    Ok(record) => request.hashed(&record),
-                    Err(err) => request.failed(err.to_string()),
-                }
-            }
+            Step::HashPassphrase(request) => match passphrase::rehearse_and_hash(asker) {
+                Ok(record) => request.hashed(&record),
+                Err(err) => request.failed(err.to_string()),
+            },
             Step::WriteValue(request) => request.written(),
             Step::Done(outcome) => return outcome,
         }
@@ -215,7 +219,7 @@ fn answer_draw(request: DrawEntropy) {
 fn drive_generate(
     mut generate: Generate,
     volume: &Path,
-    ask_via: AskVia,
+    asker: &mut Asker,
 ) -> Result<(), GenerateError> {
     use core::generate::Step;
     loop {
@@ -223,10 +227,10 @@ fn drive_generate(
             Step::CheckValue(request) => answer_check(volume, request),
             Step::DrawEntropy(request) => answer_draw(request),
             Step::HashPassphrase(request) => {
-                let hashed = passphrase::prompt_passphrase_and_hash(
+                let hashed = passphrase::prompt_and_hash(
+                    asker,
                     request.path().as_str(),
                     request.description(),
-                    ask_via,
                 );
                 match hashed {
                     Ok(record) => request.hashed(&record),

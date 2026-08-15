@@ -321,7 +321,7 @@ fn passphrases_that_differ_leave_the_volume_alone() {
         .write_stdin("one\nanother\n")
         .assert()
         .code(1)
-        .stderr(predicate::str::contains("passphrases do not match"));
+        .stderr(predicate::str::contains("the answers do not match"));
     volume
         .child("user.passwd")
         .assert(predicate::path::missing());
@@ -479,6 +479,113 @@ fn upgrading_fills_the_field_the_volume_lacks() {
         .arg(output.path())
         .assert()
         .success();
+}
+
+#[test]
+fn a_piped_passphrase_populates_without_an_operator() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .args(["--ask-via", "stdin"])
+        .write_stdin("hunter2\ncorrect horse battery staple\n")
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Confirm:").not());
+    volume
+        .child("user.passwd")
+        .assert(predicate::str::starts_with("$y$"));
+
+    orma()
+        .arg("resolve")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg("--evaluate-only")
+        .assert()
+        .success();
+}
+
+#[test]
+fn a_piped_passphrase_upgrades_without_an_operator() {
+    let volume = volume(&[("/machine-id", MACHINE_ID)]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-every-field.yaml"))
+        .arg(volume.path())
+        .arg("--upgrade")
+        .args(["--ask-via", "stdin"])
+        .write_stdin("hunter2\ncorrect horse battery staple\n")
+        .assert()
+        .success();
+    volume.child("machine-id").assert(MACHINE_ID);
+    volume
+        .child("user.passwd")
+        .assert(predicate::str::starts_with("$y$"));
+}
+
+/// Whether `record` is what hashing `passphrase` under its own salt produces.
+fn is_hash_of(record: &str, passphrase: &str) -> bool {
+    let (salted, _) = record.trim_end().rsplit_once('$').unwrap();
+    let recomputed = Command::new("mkpasswd")
+        .args(["-m", "yescrypt", "-S", salted, "-s"])
+        .write_stdin(passphrase)
+        .output()
+        .unwrap();
+    String::from_utf8(recomputed.stdout).unwrap().trim_end() == record.trim_end()
+}
+
+#[test]
+fn each_question_is_answered_by_the_line_that_follows_it() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-two-passwords.yaml"))
+        .arg(volume.path())
+        .args(["--ask-via", "stdin"])
+        .write_stdin("alpha\nbeta\n")
+        .assert()
+        .success();
+
+    let user = std::fs::read_to_string(volume.child("user.passwd").path()).unwrap();
+    let root = std::fs::read_to_string(volume.child("root.passwd").path()).unwrap();
+    assert!(is_hash_of(&user, "alpha"), "/user.passwd: {user}");
+    assert!(is_hash_of(&root, "beta"), "/root.passwd: {root}");
+    assert!(!is_hash_of(&user, "beta"), "/user.passwd took any answer");
+}
+
+#[test]
+fn a_pipe_that_runs_dry_leaves_the_volume_alone() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-two-passwords.yaml"))
+        .arg(volume.path())
+        .args(["--ask-via", "stdin"])
+        .write_stdin("alpha\n")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "/root.passwd: stdin ran out of answers",
+        ));
+    assert_eq!(std::fs::read_dir(volume.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_dry_run_notices_a_pipe_that_would_run_dry() {
+    let volume = volume(&[]);
+    orma()
+        .arg("generate")
+        .arg(fixture("schema-two-passwords.yaml"))
+        .arg(volume.path())
+        .args(["--ask-via", "stdin"])
+        .arg("--dry-run")
+        .write_stdin("alpha\n")
+        .assert()
+        .code(1)
+        .stderr(predicate::str::contains(
+            "/root.passwd: stdin ran out of answers",
+        ));
 }
 
 #[test]

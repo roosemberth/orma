@@ -70,9 +70,13 @@ Both operations use a *schema* and an *identity volume*.
 - **generate** writes new values into the identity volume.
   This is typically used to populate a new identity volume and to generate any
   missing values on an existing identity volume using `--upgrade` (e.g. when
-  the schema has grown a field).
+  the schema has grown a field); with `--dry-run`, the command writes nothing.
   Some field types prompt the operator (e.g. `hashed-password` asks for one).
-  Prompts may be answered via the TTY (default) or using `systemd-ask-password`.
+  Prompts may be answered via the TTY (default), using `systemd-ask-password`,
+  or read from stdin (e.g. for use in CI scripts).
+
+  When `--ask-via stdin` and `--dry-run` are used, lines are read from stdin
+  to verify all prompts are answered.
 
 Run `orma --help` for more details.
 
@@ -153,10 +157,7 @@ and populates a volume that satisfies it in the first place.
 
 Upgrading refuses an identity volume with an invalid value.
 
-Provisioning takes an operator and one machine at a time. A `hashed-password`
-is always asked for, and `--ask-via` changes who does the asking rather than
-whether anyone is asked; values cannot be fed in from a file or a pipe. Forty
-machines means forty prompts.
+The only mechanism to test needed tools are available at runtime is `--dry-run`.
 
 Two field types exist, `machine-id` and `hashed-password`. Host keys and other
 key material are not covered yet. More types will be added as needs land.
